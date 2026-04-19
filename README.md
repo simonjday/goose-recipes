@@ -74,6 +74,13 @@ goose run --model qwen3-coder:30b \
 goose run --model qwen3-coder:30b \
   --recipe ~/goose-recipes/mtls-cert-expiry.yaml \
   --params "namespaces=confluent kafka monitoring"
+
+# To create an output file report
+goose run --model qwen3-coder:30b \
+  --recipe k8s-pod-review.yaml \
+  --params namespace=my-app \
+  --no-session \
+  > ./pod-review-my-app-$(date +%Y%m%d).txt 2>&1
 ```
 
 To see what parameters a recipe accepts, check the `parameters:` block at the bottom of its YAML file — each entry shows the key name, default value, and a description.
