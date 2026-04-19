@@ -1,0 +1,79 @@
+version: "1.0.0"
+title: "K8s Pod Best Practice Review"
+description: "Reviews pods against Kubernetes best practices. Uses pre-built jq filter files — no inline jq required or permitted."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes reliability and security expert.
+
+  STRICT RULE — NO INLINE JQ: You must NEVER write your own jq expressions.
+  The filter files in ./jq-filters/ already handle all the data extraction.
+  Your only job is to run the exact commands shown in the prompt steps and interpret the results.
+  If a command returns an error, report it and move on — do not attempt to fix or rewrite the command.
+
+prompt: |
+  Review pods in namespace '{{ namespace }}' against Kubernetes best practices.
+  Run every step in order. Do not skip steps. Do not write new jq or shell commands.
+
+  Step 1 — Confirm filter files are present:
+    ls ./jq-filters/pod-review.jq
+    ls ./jq-filters/pdb-check.jq
+
+  Step 2 — Get pod data (use this exact command, do not modify it):
+    kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/pod-review.jq
+
+  Step 3 — Get PDB data (use this exact command, do not modify it):
+    kubectl get pdb -n {{ namespace }} -o json | jq -f ./jq-filters/pdb-check.jq
+
+  Step 4 — Get deployment replica counts to identify multi-replica workloads:
+    kubectl get deployments,statefulsets -n {{ namespace }} \
+      -o jsonpath='{range .items[*]}{.metadata.name}{" replicas="}{.spec.replicas}{"\n"}{end}'
+
+  Step 5 — Using ONLY the data returned in steps 2, 3 and 4, evaluate each pod:
+
+  For each pod from Step 2 check:
+    RESOURCES:  hasRequests=false or hasLimits=false on any container = FAIL
+    PROBES:     hasLiveness=false or hasReadiness=false on any container = FAIL
+    IMAGE TAG:  image ends in ":latest" or has no tag (no ":" in image name) = FAIL
+    PULL POLICY: pullPolicy=Always AND image tag is latest = extra flag
+    SECURITY (container): runAsNonRoot=false OR allowPrivEsc=true OR readOnlyRoot=false = FAIL
+    SECURITY (pod): podSecCtx.runAsNonRoot=false = FAIL
+    PDB: check if any PDB selector from Step 3 matches this pod's name pattern
+         AND workload from Step 4 has replicas > 1 = FAIL if no match
+
+  Step 6 — Output the report:
+
+  For each pod:
+  Pod: <name>
+  Findings:
+    - [RESOURCES] <container>: missing cpu/memory requests or limits
+    - [PROBES] <container>: missing livenessProbe or readinessProbe
+    - [IMAGE] <container>: image "<image>" uses latest or untagged
+    - [SECURITY] <container>: allowPrivilegeEscalation=true / runAsNonRoot=false / readOnlyRootFilesystem=false
+    - [PDB] no PodDisruptionBudget covers this workload
+  Fix:
+    <kubectl patch or yaml snippet for each finding>
+
+  If no findings: Pod: <name> — PASS ✓
+
+  SUMMARY
+  -------
+  Pods reviewed: <n>
+  PASS:  <n>
+  FAIL:  <n>
+  Findings by category:
+    RESOURCES: <n>
+    PROBES:    <n>
+    IMAGE:     <n>
+    SECURITY:  <n>
+    PDB:       <n>
+
+parameters:
+  - key: namespace
+    input_type: string
+    requirement: optional
+    description: "Namespace to inspect"
+    default: "confluent"

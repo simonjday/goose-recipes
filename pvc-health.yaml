@@ -1,0 +1,68 @@
+version: "1.0.0"
+title: "PVC and Storage Health Check"
+description: "Checks PVCs, PVs, StorageClasses and identifies unused PVCs. References pre-built jq filter files — no inline jq, no shell quoting issues."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes storage expert.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  Never flag TLS secrets as candidates for deletion.
+prompt: |
+  Check PVC and storage health across {{ scope }}.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/pvc-filter.jq \
+       ./jq-filters/pv-filter.jq \
+       ./jq-filters/pvc-mounts.jq
+
+  Step 2 — Get all PVCs:
+    {% if scope == "cluster" %}
+    kubectl get pvc --all-namespaces -o json | jq -f ./jq-filters/pvc-filter.jq
+    {% else %}
+    kubectl get pvc -n {{ scope }} -o json | jq -f ./jq-filters/pvc-filter.jq
+    {% endif %}
+
+  Step 3 — Get all PVs:
+    kubectl get pv -o json | jq -f ./jq-filters/pv-filter.jq
+
+  Step 4 — Get StorageClasses (single-line inline jq is safe):
+    kubectl get storageclass -o json | \
+      jq -r '[.items[] | {name: .metadata.name, provisioner: .provisioner, reclaimPolicy: .reclaimPolicy, isDefault: (.metadata.annotations["storageclass.kubernetes.io/is-default-class"] == "true")}]'
+
+  Step 5 — Get PVC names currently mounted by running pods:
+    kubectl get pods --all-namespaces -o json | jq -f ./jq-filters/pvc-mounts.jq
+
+  Step 6 — Get recent storage failure events (single-line inline jq is safe):
+    kubectl get events --all-namespaces --field-selector reason=FailedMount -o json | \
+      jq '[.items[-10:] | .[] | {namespace: .involvedObject.namespace, pod: .involvedObject.name, message: .message}]'
+
+  Step 7 — Identify unused PVCs: from Step 2 not in Step 5 mount list.
+
+  Step 8 — Output:
+
+  PVC AND STORAGE HEALTH — {{ scope }}
+
+  SUMMARY: Bound: <n> ✓ | Pending: <n> RED | Lost: <n> RED | Unused: <n> AMBER
+           PV Released: <n> AMBER | PV Failed: <n> RED | Default SC: <name or "NONE RED">
+
+  RED: <namespace>/<pvc>: <Pending/Lost> — kubectl describe pvc <n> -n <namespace>
+  AMBER — Released PVs: PV <n> — verify data safe then: kubectl delete pv <n>
+  AMBER — Unused PVCs: <namespace>/<n> — kubectl delete pvc <n> -n <namespace>
+
+  STORAGECLASS: Name | Provisioner | Reclaim | Default
+  MOUNT FAILURES: <pod>: <message>
+
+parameters:
+  - key: scope
+    input_type: string
+    requirement: optional
+    description: "Either 'cluster' for all namespaces or a specific namespace name"
+    default: "cluster"

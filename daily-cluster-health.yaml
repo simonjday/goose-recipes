@@ -1,0 +1,105 @@
+version: "1.0.0"
+title: "Daily Cluster Health Check"
+description: "Comprehensive daily health check. Filters output to summaries and flagged items only — no full item lists — to stay within shell output limits."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 600
+    bundled: true
+instructions: |
+  You are a senior Kubernetes platform engineer conducting a daily cluster health review.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  IMPORTANT: The jq filters output SUMMARIES and flagged items only — not full item lists.
+  Do not attempt to re-run commands to get more detail. Work only with what each filter returns.
+  Run ALL steps in order. Do not stop early if a step returns no flagged items.
+  At the end produce an overall RAG: RED / AMBER / GREEN with a brief justification.
+  RED   = immediate action (node down, crashloop, enforce violation, failed sync)
+  AMBER = action needed soon (pressure, audit violation, degraded, OutOfSync)
+  GREEN = all checks passed
+prompt: |
+  Run a daily health check. Namespace: '{{ namespace }}'. ArgoCD: '{{ argocd_namespace }}'.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/hc-nodes.jq \
+       ./jq-filters/hc-pods.jq \
+       ./jq-filters/hc-argo.jq \
+       ./jq-filters/hc-policy.jq
+
+  Step 2 — NODE HEALTH:
+    kubectl get nodes -o json | jq -f ./jq-filters/hc-nodes.jq
+    (returns: total count, notReady list, pressure lists, versions)
+    Flag: any notReady = RED | any pressure = AMBER
+
+  Step 3 — WORKLOAD HEALTH ({{ namespace }}):
+    kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/hc-pods.jq
+    (returns: total, notRunning, highRestarts >5, oomKilled, notReady)
+    Flag: notRunning = RED | oomKilled = RED | highRestarts > 20 = RED | > 5 = AMBER | notReady = AMBER
+
+  Step 4 — WARNING EVENTS (last 5 only):
+    kubectl get events -n {{ namespace }} --field-selector type=Warning \
+      --sort-by='.lastTimestamp' \
+      -o jsonpath='{range .items[-5:]}{.reason}{": "}{.involvedObject.name}{" — "}{.message}{"\n"}{end}'
+
+  Step 5 — ARGOCD SYNC ({{ argocd_namespace }}):
+    kubectl get applications.argoproj.io -n {{ argocd_namespace }} -o json | \
+      jq -f ./jq-filters/hc-argo.jq
+    (returns: total, outOfSync list, degraded list, syncFailed list, noAutoSync list)
+    Flag: degraded or syncFailed = RED | outOfSync or noAutoSync = AMBER
+
+  Step 6 — KYVERNO POLICY ({{ namespace }}):
+    kubectl get policyreport.wgpolicyk8s.io -n {{ namespace }} -o json | \
+      jq -f ./jq-filters/hc-policy.jq
+    (returns: failure list with policy/rule/resource/severity)
+    Flag: Enforce mode failures = RED | Audit mode failures = AMBER
+
+  Step 7 — CERT EXPIRY ({{ namespace }}):
+    kubectl get secrets -n {{ namespace }} \
+      --field-selector type=kubernetes.io/tls \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | \
+    while read s; do
+      expiry=$(kubectl get secret "$s" -n {{ namespace }} \
+        -o jsonpath='{.data.tls\.crt}' | base64 -d | \
+        openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
+      echo "$s: $expiry"
+    done
+    Flag: expiry within 7 days = RED | within 30 days = AMBER
+
+  Step 8 — PRODUCE FINAL REPORT (MANDATORY — run this regardless of findings above):
+
+  ┌─────────────────────────────────────────┐
+  │         DAILY CLUSTER HEALTH CHECK      │
+  │         {{ namespace }}                 │
+  ├──────────────────┬──────────────────────┤
+  │ Nodes            │ <RAG> <one-liner>    │
+  │ Workload Health  │ <RAG> <one-liner>    │
+  │ ArgoCD Sync      │ <RAG> <one-liner>    │
+  │ Kyverno Policy   │ <RAG> <one-liner>    │
+  │ Cert Expiry      │ <RAG> <one-liner>    │
+  ├──────────────────┴──────────────────────┤
+  │ OVERALL: <RED|AMBER|GREEN>              │
+  └─────────────────────────────────────────┘
+
+  RED items (fix now):
+  - <item> → <command>
+
+  AMBER items (fix soon):
+  - <item> → <command>
+
+  GREEN ✓: <list of passing sections>
+
+parameters:
+  - key: namespace
+    input_type: string
+    requirement: optional
+    description: "Primary workload namespace"
+    default: "confluent"
+  - key: argocd_namespace
+    input_type: string
+    requirement: optional
+    description: "ArgoCD namespace"
+    default: "argocd"

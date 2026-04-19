@@ -1,0 +1,58 @@
+version: "1.0.0"
+title: "Namespace ResourceQuota and LimitRange Audit"
+description: "Checks all namespaces for ResourceQuota and LimitRange presence and shows usage vs limits. References pre-built jq filter files — no inline jq, no shell quoting issues."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes resource governance expert.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  Exclude system namespaces from gap analysis.
+prompt: |
+  Audit ResourceQuota and LimitRange configuration across {{ scope }}.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/quota-filter.jq ./jq-filters/limitrange-filter.jq
+
+  Step 2 — Get non-system namespaces (single-line inline jq is safe):
+    kubectl get namespaces -o json | \
+      jq -r '.items[] | select(.metadata.name | test("^kube-|^openshift-") | not) | .metadata.name'
+
+  Step 3 — For each namespace check ResourceQuota and LimitRange:
+    kubectl get resourcequota -n <namespace> -o json | jq -f ./jq-filters/quota-filter.jq
+    kubectl get limitrange -n <namespace> -o json | jq -f ./jq-filters/limitrange-filter.jq
+    (empty array = missing, flag AMBER)
+
+  Step 4 — Check OpenShift ClusterResourceQuota if applicable:
+    kubectl get appliedclusterresourcequota -o json 2>/dev/null | \
+      jq '[.items[] | {name: .metadata.name, hard: .spec.quota.hard, used: .status.total.used}]'
+
+  Step 5 — Calculate usage %: pct = used/hard * 100. > 95% = RED, > 80% = AMBER.
+
+  Step 6 — Output:
+
+  RESOURCE QUOTA & LIMITRANGE AUDIT — {{ scope }}
+
+  QUOTA USAGE: Namespace | CPU Used/Hard | Mem Used/Hard | Pods | Status
+  MISSING QUOTAS (AMBER): <list with suggested yaml>
+  MISSING LIMITRANGES (AMBER): <list with suggested yaml>
+  QUOTA PRESSURE (>80%): <namespace>/<resource>: <used>/<hard> (<pct>%)
+
+  SUMMARY
+  -------
+  Audited: <n> | With Quota: <n> | Missing Quota: <n> | With LimitRange: <n> | Missing LR: <n>
+  Pressure >80%: <n> AMBER | Critical >95%: <n> RED
+
+parameters:
+  - key: scope
+    input_type: string
+    requirement: optional
+    description: "Either 'cluster' to check all namespaces or a specific namespace name"
+    default: "cluster"

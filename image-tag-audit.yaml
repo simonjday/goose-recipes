@@ -1,0 +1,116 @@
+version: "1.0.0"
+title: "Container Image Tag Audit"
+description: "Scans for containers using 'latest' or untagged images. References pre-built jq filter files from ./jq-filters/ — no inline jq, no shell quoting issues."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes security engineer focused on supply chain security.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  Image tag issues are a supply chain risk — 'latest' is mutable and can cause silent version changes.
+  Best practice order: SHA digest > immutable semver tag > named tag > 'latest' (never).
+  IMPORTANT: Use jq -f with the pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+prompt: |
+  Perform a container image tag audit across {{ scope }}.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/img-audit.jq ./jq-filters/deploy-audit.jq
+
+  Step 2 — Extract all container images using the pre-built filter:
+    {% if scope == "cluster" %}
+    kubectl get pods --all-namespaces -o json | jq -f ./jq-filters/img-audit.jq
+    {% else %}
+    kubectl get pods -n {{ scope }} -o json | jq -f ./jq-filters/img-audit.jq
+    {% endif %}
+
+  Step 3 — Get deployment pull policies using the pre-built filter:
+    {% if scope == "cluster" %}
+    kubectl get deployments --all-namespaces -o json | jq -f ./jq-filters/deploy-audit.jq
+    {% else %}
+    kubectl get deployments -n {{ scope }} -o json | jq -f ./jq-filters/deploy-audit.jq
+    {% endif %}
+
+  Step 4 — Classify each image from the output:
+    CRITICAL = tag is 'latest' or no tag at all (no tag implies latest)
+    HIGH     = named tag present but no @sha256: digest
+    OK       = image contains @sha256: digest
+
+    Rules:
+    - "nginx"                 → CRITICAL (no tag = latest)
+    - "nginx:latest"          → CRITICAL
+    - "nginx:1.25"            → HIGH
+    - "nginx:1.25@sha256:…"   → OK
+    - "registry/img@sha256:…" → OK
+
+    Also flag: CRITICAL image + imagePullPolicy=Always = highest risk
+
+  Step 5 — Output findings:
+
+  CONTAINER IMAGE TAG AUDIT
+  --------------------------
+  Scope: {{ scope }}
+
+  SUMMARY
+  -------
+  Total images scanned: <n>
+  CRITICAL (latest/untagged): <n>
+  HIGH (named tag, no digest): <n>
+  OK (digest pinned): <n>
+
+  CRITICAL IMAGES:
+  ----------------
+  Namespace | Pod | Container | Image | Pull Policy
+  <findings or "None found ✓">
+
+  Fix — get current digest from running pod:
+    kubectl get pod <pod> -n <namespace> \
+      -o jsonpath='{.status.containerStatuses[0].imageID}'
+  Then pin in deployment:
+    image: <registry>/<image>:<tag>@sha256:<digest>
+
+  HIGH IMAGES (top 10):
+  ----------------------
+  Namespace | Pod | Container | Image
+  <findings or "None found ✓">
+
+  NAMESPACE SUMMARY:
+  ------------------
+  Namespace | Critical | High | OK | Total
+  <table>
+
+  KYVERNO POLICY RECOMMENDATION:
+  --------------------------------
+  If no disallow-latest-tag policy exists:
+    kubectl apply -f - <<EOF
+    apiVersion: kyverno.io/v1
+    kind: ClusterPolicy
+    metadata:
+      name: disallow-latest-tag
+    spec:
+      validationFailureAction: Audit
+      rules:
+      - name: require-image-tag
+        match:
+          any:
+          - resources:
+              kinds: [Pod]
+        validate:
+          message: "Image tag 'latest' is not allowed"
+          pattern:
+            spec:
+              containers:
+              - image: "!*:latest"
+    EOF
+
+parameters:
+  - key: scope
+    input_type: string
+    requirement: optional
+    description: "Either a specific namespace or 'cluster' for all namespaces. Start with a specific namespace before running cluster-wide."
+    default: "confluent"

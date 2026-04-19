@@ -1,0 +1,68 @@
+version: "1.0.0"
+title: "Kyverno Policy Exception Audit"
+description: "Lists all PolicyException resources and flags stale, broad, or orphaned ones. References pre-built jq filter files — no inline jq, no shell quoting issues."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes compliance and policy expert.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  PolicyExceptions represent deliberate security control bypasses — track them carefully.
+prompt: |
+  Audit all Kyverno PolicyException resources across the cluster.
+
+  Step 1 — Confirm filter file exists:
+    ls ./jq-filters/kyverno-exceptions.jq
+
+  Step 2 — Get all PolicyExceptions:
+    kubectl get policyexceptions.kyverno.io --all-namespaces -o json | \
+      jq -f ./jq-filters/kyverno-exceptions.jq
+
+  Step 3 — For each excepted policy get enforcement mode (single-line inline jq is safe):
+    kubectl get clusterpolicy <policy-name> -o json | \
+      jq '{name: .metadata.name, action: .spec.validationFailureAction, rules: [.spec.rules[] | {name: .name, message: (.validate.message // "")}]}'
+
+  Step 4 — Check if each targeted resource still exists:
+    kubectl get <kind> <n> -n <namespace> 2>/dev/null | jq '{exists: true}' \
+      || echo '{"exists": false}'
+
+  Step 5 — Classify:
+    CRITICAL = bypasses Enforce-mode security rule
+    HIGH     = bypasses Enforce-mode reliability rule
+    MEDIUM   = bypasses Audit-mode rule
+    BROAD    = targets namespace or all resources
+    STALE    = older than {{ max_exception_age_days }} days
+    ORPHANED = target resource no longer exists
+
+  Step 6 — Output:
+
+  SUMMARY
+  -------
+  Total: <n> | CRITICAL: <n> | HIGH: <n> | MEDIUM: <n>
+  Broad: <n> | Stale: <n> | Orphaned: <n>
+
+  EXCEPTION DETAILS
+  -----------------
+  <namespace>/<n> | Age: <n>d | Severity: <level> | Flags: <BROAD|STALE|ORPHANED>
+  Bypasses: <policy>/<rules> (<Enforce|Audit>)
+  Fix:
+    ORPHANED → kubectl delete policyexception <n> -n <namespace>
+    CRITICAL → kubectl annotate policyexception <n> -n <namespace> review-date="<90d>"
+    BROAD    → narrow scope to specific resource names
+
+  ORPHANED (safe to delete):
+  kubectl delete policyexception <n> -n <namespace>
+
+parameters:
+  - key: max_exception_age_days
+    input_type: string
+    requirement: optional
+    description: "Exceptions older than this many days are flagged as potentially stale"
+    default: "90"

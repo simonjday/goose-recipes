@@ -1,0 +1,71 @@
+version: "1.0.0"
+title: "PodDisruptionBudget Coverage Audit"
+description: "Cluster-wide audit of workloads with replicas > 1 missing a PDB. References pre-built jq filter files — no inline jq, no shell quoting issues."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes reliability engineer.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  Prioritise StatefulSets (Kafka brokers) as highest risk when missing a PDB.
+prompt: |
+  Audit PodDisruptionBudget coverage across {{ scope }}.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/workload-filter.jq ./jq-filters/pdb-filter.jq
+
+  Step 2 — Get namespaces (single-line inline jq is safe):
+    {% if scope == "cluster" %}
+    kubectl get namespaces -o json | \
+      jq -r '.items[] | select(.metadata.name | test("^kube-|^openshift-") | not) | .metadata.name'
+    {% else %}
+    echo "{{ scope }}"
+    {% endif %}
+
+  Step 3 — For each namespace get workloads and PDBs:
+    kubectl get deployments -n <namespace> -o json | jq -f ./jq-filters/workload-filter.jq
+    kubectl get statefulsets -n <namespace> -o json | jq -f ./jq-filters/workload-filter.jq
+    kubectl get pdb -n <namespace> -o json | jq -f ./jq-filters/pdb-filter.jq
+
+  Step 4 — Match PDBs to workloads by comparing selector labels.
+    Unprotected = replicas > 1 AND no PDB selector matches its labels.
+    Also flag: minAvailable == replicas (misconfigured — blocks all disruptions).
+
+  Step 5 — Output:
+
+  PDB COVERAGE AUDIT — {{ scope }}
+
+  SUMMARY: Checked: <n> | Protected: <n> | StatefulSets missing PDB: <n> HIGH | Deployments missing PDB: <n> MEDIUM | Misconfigured: <n> LOW
+
+  HIGH — StatefulSets missing PDB:
+  <namespace>/<n> (replicas: <n>, labels: <key=value>)
+  Fix:
+    kubectl apply -f - <<EOF
+    apiVersion: policy/v1
+    kind: PodDisruptionBudget
+    metadata:
+      name: <n>-pdb
+      namespace: <namespace>
+    spec:
+      minAvailable: <replicas - 1>
+      selector:
+        matchLabels: <labels>
+    EOF
+
+  MEDIUM — Deployments missing PDB: (same format)
+  MISCONFIGURED PDBs: <namespace>/<pdb>: <issue>
+  PROTECTED ✓: <namespace>/<n> → <pdb-name>
+
+parameters:
+  - key: scope
+    input_type: string
+    requirement: optional
+    description: "Either 'cluster' for all namespaces or a specific namespace name"
+    default: "cluster"

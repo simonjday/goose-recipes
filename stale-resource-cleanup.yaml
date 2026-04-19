@@ -1,0 +1,85 @@
+version: "1.0.0"
+title: "Stale Resource Cleanup"
+description: "Finds completed/failed Jobs, terminal Pods, and unused ConfigMaps/Secrets. References pre-built jq filter files — no inline jq. Outputs a reviewed cleanup script — does NOT auto-delete."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes platform engineer focused on cluster hygiene.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: This recipe is READ-ONLY — identify candidates, never delete anything.
+  Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  Never flag TLS secrets (type=kubernetes.io/tls) as candidates for deletion.
+prompt: |
+  Identify stale resources in namespace '{{ namespace }}' for safe cleanup.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/jobs-filter.jq \
+       ./jq-filters/terminal-pods.jq \
+       ./jq-filters/configmaps-filter.jq \
+       ./jq-filters/secrets-filter.jq \
+       ./jq-filters/pod-cm-refs.jq \
+       ./jq-filters/pod-secret-refs.jq
+
+  Step 2 — Find completed and failed Jobs:
+    kubectl get jobs -n {{ namespace }} -o json | jq -f ./jq-filters/jobs-filter.jq
+    Flag: succeeded > 0 AND completionTime > {{ max_job_age_hours }}h ago = COMPLETED
+    Flag: failed > 0 AND active == 0 = FAILED
+
+  Step 3 — Find Pods in terminal states:
+    kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/terminal-pods.jq
+
+  Step 4 — Find unused ConfigMaps:
+    kubectl get configmaps -n {{ namespace }} -o json | jq -f ./jq-filters/configmaps-filter.jq
+    kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/pod-cm-refs.jq
+    ConfigMaps in first list NOT in second AND older than {{ max_unused_age_days }} days = UNUSED
+
+  Step 5 — Find unused Secrets (TLS excluded by filter):
+    kubectl get secrets -n {{ namespace }} -o json | jq -f ./jq-filters/secrets-filter.jq
+    kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/pod-secret-refs.jq
+    Secrets in first list NOT in second AND older than {{ max_unused_age_days }} days = UNUSED
+
+  Step 6 — Output summary and commented cleanup script:
+
+  STALE RESOURCE REPORT — {{ namespace }}
+  ----------------------------------------
+  Completed Jobs (>{{ max_job_age_hours }}h): <n>
+  Failed Jobs: <n> | Terminal Pods: <n>
+  Unused ConfigMaps: <n> | Unused Secrets (non-TLS): <n>
+
+  KIND | NAME | AGE | REASON | ACTION (DELETE/REVIEW/SKIP)
+
+  CLEANUP SCRIPT (review every line — all commands commented out):
+  #!/bin/zsh
+  # Dry-run: sed 's/kubectl delete/kubectl delete --dry-run=client/g' cleanup.sh | zsh
+  # COMPLETED JOBS
+  # kubectl delete job <n> -n {{ namespace }}
+  # TERMINAL PODS
+  # kubectl delete pod <n> -n {{ namespace }}
+  # UNUSED CONFIGMAPS
+  # kubectl delete configmap <n> -n {{ namespace }}
+  # UNUSED SECRETS (TLS excluded)
+  # kubectl delete secret <n> -n {{ namespace }}
+
+parameters:
+  - key: namespace
+    input_type: string
+    requirement: optional
+    description: "Namespace to scan for stale resources"
+    default: "confluent"
+  - key: max_job_age_hours
+    input_type: string
+    requirement: optional
+    description: "Completed jobs older than this many hours are flagged"
+    default: "24"
+  - key: max_unused_age_days
+    input_type: string
+    requirement: optional
+    description: "Unused ConfigMaps/Secrets older than this many days are flagged"
+    default: "7"

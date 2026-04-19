@@ -1,0 +1,94 @@
+version: "1.0.0"
+title: "Node Capacity Planning Report"
+description: "Per-node headroom report comparing allocatable vs requested. Uses pre-built jq filter files — the pod-requests filter groups by node internally, no further processing needed."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes capacity planning expert.
+  STRICT RULE — NO INLINE JQ OR SHELL SCRIPTING: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and move on.
+  IMPORTANT: Do not pipe jq output through a second jq command.
+  The filter files already produce the final grouped structure — just read and report the output.
+  IMPORTANT: If you need to save output to a file, always write to the current directory
+  using a relative path like ./report.md, never an absolute path like /report.md.
+prompt: |
+  Generate a node capacity planning report.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/node-filter.jq ./jq-filters/pod-requests.jq ./jq-filters/ns-count.jq
+
+  Step 2 — Get node allocatable resources:
+    kubectl get nodes -o json | jq -f ./jq-filters/node-filter.jq
+
+    This returns a list of nodes with: name, instanceType, allocatableCPU, allocatableMemory, kubeletVersion.
+    Record this as NODE_DATA.
+
+  Step 3 — Get actual node usage (requires metrics-server):
+    kubectl top nodes 2>/dev/null || echo "metrics-server not available"
+
+  Step 4 — Get pod requests grouped by node:
+    kubectl get pods --all-namespaces -o json | jq -f ./jq-filters/pod-requests.jq
+
+    This returns a list grouped by node with: node, podCount, cpuRequests[], memRequests[].
+    The cpuRequests and memRequests are arrays of strings (e.g. ["500m","1Gi"]).
+    Record this as POD_DATA. Do NOT pipe this through any additional jq commands.
+
+  Step 5 — Get top 5 namespaces by pod count:
+    kubectl get pods --all-namespaces -o json | jq -f ./jq-filters/ns-count.jq
+
+  Step 6 — Using NODE_DATA and POD_DATA from steps 2 and 4, calculate headroom per node:
+
+    For each node in NODE_DATA:
+    - Find matching entry in POD_DATA by node name
+    - List the cpuRequests and memRequests arrays as-is (do not sum them — just list them)
+    - Count pods from podCount field
+    - Note: CPU values may be in millicores (e.g. "500m" = 0.5 cores) or cores (e.g. "2")
+    - Note: Memory values may be in Mi, Gi, Ki — report as-is, do not convert
+
+    Flag thresholds (use pod count as a rough proxy if you cannot sum the resource strings):
+    - > {{ warn_threshold }} pods on a node relative to others = AMBER
+    - > {{ critical_threshold }} pods on a node relative to others = RED
+    - If metrics-server available: use actual CPU/mem % from Step 3
+
+  Step 7 — Output the report. Do NOT write to a file — output directly in the chat:
+
+  NODE CAPACITY PLANNING REPORT
+  ------------------------------
+  Generated: <today's date>
+
+  PER-NODE SUMMARY
+  -----------------
+  Node: <name> (<instanceType>)
+  Allocatable: CPU <allocatableCPU> | Memory <allocatableMemory>
+  Running pods: <podCount>
+  CPU requests: <cpuRequests list>
+  Mem requests: <memRequests list>
+  Actual usage: <from kubectl top if available>
+  Status: GREEN / AMBER / RED
+
+  (repeat for each node)
+
+  TOP 5 NAMESPACES BY POD COUNT
+  ------------------------------
+  <from Step 5 output>
+
+  RECOMMENDATIONS
+  ---------------
+  <based on pod distribution and any metrics-server data>
+
+parameters:
+  - key: warn_threshold
+    input_type: string
+    requirement: optional
+    description: "Pod count per node at which to warn (AMBER) — used when metrics-server unavailable"
+    default: "20"
+  - key: critical_threshold
+    input_type: string
+    requirement: optional
+    description: "Pod count per node at which to alert (RED)"
+    default: "40"

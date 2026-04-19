@@ -1,0 +1,70 @@
+version: "1.0.0"
+title: "mTLS Certificate Expiry Check"
+description: "Scans TLS secrets and flags certs expiring within 30 days (AMBER) or 7 days (RED). Uses a pre-built shell script for macOS-safe date parsing — no inline shell logic required."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes PKI and TLS expert.
+  STRICT RULE — NO INLINE JQ OR SHELL SCRIPTING: Never write your own shell commands
+  beyond what is shown in the prompt steps. The cert-check.sh script handles all date
+  parsing, base64 decoding, and openssl calls correctly for macOS.
+  Do NOT attempt to fix or rewrite the script. Do NOT write your own date parsing logic.
+  If a step errors, report the error and move on.
+prompt: |
+  Check TLS certificate expiry for namespaces: {{ namespaces }}
+
+  Step 1 — Confirm the cert check script exists:
+    ls ./cert-check.sh
+
+  Step 2 — Run the cert check script (pass each namespace as a separate argument):
+    zsh ./cert-check.sh {{ namespaces }}
+
+    The script outputs one pipe-delimited line per cert:
+      STATUS|namespace|secret|key|days_remaining|expiry_date
+    Followed by a SUMMARY line:
+      SUMMARY | Total: N | RED: N | AMBER: N | GREEN: N
+
+    STATUS values: RED (≤7 days), AMBER (≤30 days), GREEN (>30 days), UNKNOWN (parse failed)
+
+  Step 3 — For any RED or AMBER certs, identify which CFK component uses that secret:
+    kubectl get kafka schemaregistry kafkarestproxy controlcenter \
+      -n <namespace> -o json 2>/dev/null | \
+      jq -r '.items[] | .kind + "/" + .metadata.name + " → " + (.spec.tls.secretRef.name // "auto-generated")'
+
+  Step 4 — Output the report:
+
+  CERTIFICATE EXPIRY REPORT
+  -------------------------
+  Namespaces: {{ namespaces }}
+
+  RED (≤ 7 days — renew immediately):
+    <namespace>/<secret> (<key>): <days> days remaining, expires <date>
+    Used by: <CFK component or "standalone">
+    Renew:
+      kubectl create secret tls <secret> --cert=new.crt --key=new.key \
+        -n <namespace> --dry-run=client -o yaml | kubectl apply -f -
+
+  AMBER (≤ 30 days — schedule renewal):
+    <namespace>/<secret> (<key>): <days> days remaining, expires <date>
+
+  GREEN (> 30 days):
+    <namespace>/<secret>: <days> days ✓
+
+  UNKNOWN (could not parse expiry):
+    <namespace>/<secret>: manual check required
+      kubectl get secret <secret> -n <namespace> \
+        -o jsonpath='{.data.tls\.crt}' | base64 -d | openssl x509 -noout -dates
+
+  SUMMARY
+  -------
+  <from script SUMMARY line>
+
+parameters:
+  - key: namespaces
+    input_type: string
+    requirement: optional
+    description: "Space-separated list of namespaces to scan"
+    default: "confluent kafka"

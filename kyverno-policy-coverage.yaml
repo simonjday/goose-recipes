@@ -1,0 +1,68 @@
+version: "1.0.0"
+title: "Kyverno Policy Coverage Gap Analysis"
+description: "Audits policy coverage gaps across namespaces. References pre-built jq filter files — no inline jq, no shell quoting issues."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes policy and compliance expert specialising in Kyverno.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  This recipe is about COVERAGE gaps, not individual violations.
+prompt: |
+  Analyse Kyverno policy coverage with focus on namespace '{{ namespace }}'.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/clusterpolicies.jq ./jq-filters/kyverno-exceptions.jq
+
+  Step 2 — Inventory policies:
+    kubectl get clusterpolicies.kyverno.io -o json | jq -f ./jq-filters/clusterpolicies.jq
+    kubectl get policies.kyverno.io --all-namespaces -o json | jq -f ./jq-filters/clusterpolicies.jq
+
+  Step 3 — Get non-system namespaces (single-line inline jq is safe):
+    kubectl get namespaces -o json | \
+      jq -r '[.items[] | select(.metadata.name | test("^kube-|^openshift-") | not) | .metadata.name]'
+
+  Step 4 — Check for PolicyExceptions:
+    kubectl get policyexceptions.kyverno.io --all-namespaces -o json 2>/dev/null | \
+      jq -f ./jq-filters/kyverno-exceptions.jq
+
+  Step 5 — Build coverage map and identify gaps.
+    For each non-system namespace: any policy? Enforce or Audit only?
+    Resource kind coverage for {{ namespace }}: Pod, Deployment, StatefulSet,
+    ServiceAccount, ClusterRoleBinding, Ingress, PVC
+
+  Step 6 — Output:
+
+  KYVERNO POLICY COVERAGE REPORT
+  --------------------------------
+  ClusterPolicies: <n> (<n> Enforce, <n> Audit) | Namespace Policies: <n> | Exceptions: <n>
+
+  NAMESPACE COVERAGE
+  Namespace | Policies | Enforce | Audit | Gap
+  <table>
+
+  HIGH GAPS (no policies): <list or "None ✓">
+  MEDIUM GAPS (Audit only): <list>
+
+  RESOURCE KIND GAPS ({{ namespace }}):
+  Kind | Covered | Types | Mode
+  <table>
+
+  ENFORCE PROMOTION CANDIDATES:
+  <policy> (Audit) →
+    kubectl patch clusterpolicy <n> --type merge \
+      -p '{"spec":{"validationFailureAction":"Enforce"}}'
+
+parameters:
+  - key: namespace
+    input_type: string
+    requirement: optional
+    description: "Primary namespace for resource kind gap analysis"
+    default: "confluent"

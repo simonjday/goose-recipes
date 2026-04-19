@@ -1,0 +1,110 @@
+version: "1.0.0"
+title: "Confluent Platform Component Health"
+description: "Checks all CFK custom resources for Ready/NotReady conditions and degraded replicas. References pre-built jq filter files — no inline jq, no shell quoting issues."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Confluent for Kubernetes (CFK) expert.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  IMPORTANT: Always run ALL steps in order. Empty results ([]) are valid — do not stop early.
+  An empty array from connect or ksqldb simply means that component is not deployed.
+  You must complete every step and produce the final summary table regardless of empty results.
+prompt: |
+  Check health of all Confluent Platform components in namespace '{{ namespace }}'.
+  Run every step below in order. Do not stop if a step returns an empty result.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/cfk-component.jq ./jq-filters/pod-health.jq
+
+  Step 2 — Check Confluent Operator pods:
+    kubectl get pods -n {{ operator_namespace }} -l app=confluent-operator \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\n"}{end}'
+
+  Step 3 — Check Kafka (run this even if you expect no output):
+    kubectl get kafka -n {{ namespace }} -o json | jq -f ./jq-filters/cfk-component.jq
+    Record result as KAFKA_RESULT ([] = not deployed)
+
+  Step 4 — Check Schema Registry (run regardless of previous results):
+    kubectl get schemaregistry -n {{ namespace }} -o json | jq -f ./jq-filters/cfk-component.jq
+    Record result as SR_RESULT
+
+  Step 5 — Check Kafka REST Proxy (run regardless of previous results):
+    kubectl get kafkarestproxy -n {{ namespace }} -o json | jq -f ./jq-filters/cfk-component.jq
+    Record result as RP_RESULT
+
+  Step 6 — Check Control Center (run regardless of previous results):
+    kubectl get controlcenter -n {{ namespace }} -o json | jq -f ./jq-filters/cfk-component.jq
+    Record result as C3_RESULT
+
+  Step 7 — Check Kafka Connect (run regardless of previous results, [] = not deployed):
+    kubectl get connect -n {{ namespace }} -o json 2>/dev/null | jq -f ./jq-filters/cfk-component.jq
+    Record result as CONNECT_RESULT
+
+  Step 8 — Check ksqlDB (run regardless of previous results, [] = not deployed):
+    kubectl get ksqldb -n {{ namespace }} -o json 2>/dev/null | jq -f ./jq-filters/cfk-component.jq
+    Record result as KSQL_RESULT
+
+  Step 9 — Check pod health for all pods in namespace (MUST run this step):
+    kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/pod-health.jq
+
+  Step 10 — Check for failed KafkaTopics only ([] = all topics healthy):
+    kubectl get kafkatopic -n {{ namespace }} -o json 2>/dev/null | \
+      jq '[.items[] | select(.status.phase != "Created") | {name: .metadata.name, phase: .status.phase}]'
+
+  Step 11 — NOW produce the full output using ALL results collected above.
+  This step is MANDATORY regardless of what previous steps returned.
+
+  Evaluation flags:
+  - phase != Running = RED
+  - readyReplicas < replicas = RED
+  - any condition with status=False = RED (include the message)
+  - pod restarts > 5 = AMBER, > 20 = RED
+  - oomKilled = RED
+  - [] result = component not deployed (mark as N/A, not an error)
+
+  CONFLUENT PLATFORM HEALTH — {{ namespace }}
+  -------------------------------------------
+  Component         | Replicas    | Phase    | Status
+  ------------------|-------------|----------|--------
+  Kafka (KRaft)     | <r>/<t>     | <phase>  | <RAG or N/A>
+  Schema Registry   | <r>/<t>     | <phase>  | <RAG or N/A>
+  REST Proxy        | <r>/<t>     | <phase>  | <RAG or N/A>
+  Control Center    | <r>/<t>     | <phase>  | <RAG or N/A>
+  Kafka Connect     | <r>/<t>     | <phase>  | <RAG or N/A if not deployed>
+  ksqlDB            | <r>/<t>     | <phase>  | <RAG or N/A if not deployed>
+
+  POD HEALTH
+  ----------
+  Pod: <n> | Restarts: <n> | Ready: <yes/no> | OOMKilled: <yes/no>
+  (list all pods)
+
+  ISSUES
+  ------
+  List any RED or AMBER findings with fix commands.
+  If no issues: "All components healthy ✓"
+
+  KAFKA TOPICS
+  ------------
+  Failed topics: <list or "All topics Created ✓">
+
+  OVERALL: <RED | AMBER | GREEN>
+
+parameters:
+  - key: namespace
+    input_type: string
+    requirement: optional
+    description: "Namespace where Confluent Platform components are deployed"
+    default: "confluent"
+  - key: operator_namespace
+    input_type: string
+    requirement: optional
+    description: "Namespace where Confluent Operator is deployed"
+    default: "confluent"

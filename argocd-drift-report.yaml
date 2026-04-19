@@ -1,0 +1,75 @@
+version: "1.0.0"
+title: "ArgoCD Drift Report"
+description: "Analyses OutOfSync ArgoCD apps and classifies drift as intentional vs accidental. References pre-built jq filter files — no inline jq, no shell quoting issues."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are an ArgoCD GitOps expert.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  Not all drift is bad — classify carefully as intentional, accidental, or requires pruning.
+prompt: |
+  Generate a drift report for OutOfSync ArgoCD applications in namespace '{{ argocd_namespace }}'.
+
+  Step 1 — Confirm filter file exists:
+    ls ./jq-filters/argo-apps.jq
+
+  Step 2 — Find OutOfSync applications:
+    kubectl get applications.argoproj.io -n {{ argocd_namespace }} -o json | \
+      jq -f ./jq-filters/argo-apps.jq
+
+    If no results, all apps are Synced — report that and exit.
+
+  Step 3 — For each drifted resource get live state (single-line jq inline is safe):
+    kubectl get <kind> <n> -n <namespace> -o json | \
+      jq '{kind: .kind, name: .metadata.name, replicas: .spec.replicas, image: (.spec.template.spec.containers[0].image // null), annotations: (.metadata.annotations | keys)}'
+
+  Step 4 — Classify each drifted resource:
+    LIKELY INTENTIONAL: replicas changed (HPA), operator annotations, status fields
+    LIKELY ACCIDENTAL:  image tag changed, resource limits patched, ConfigMap data changed
+    REQUIRES PRUNING:   requiresPruning=true
+
+  Step 5 — Output:
+
+  ARGOCD DRIFT REPORT — {{ argocd_namespace }}
+  ---------------------------------------------
+
+  SUMMARY
+  -------
+  OutOfSync: <n> | Intentional: <n> | Accidental: <n> | Pruning: <n> | Synced ✓: <n>
+
+  DRIFT DETAILS
+  -------------
+  App: <n> | Sync: OutOfSync | Health: <status>
+  Kind/Name | Classification | Action
+  <table>
+
+  Per resource fix:
+    INTENTIONAL → ignoreDifferences:
+      - group: apps
+        kind: Deployment
+        jsonPointers: ["/spec/replicas"]
+
+    ACCIDENTAL → sync:
+      kubectl patch application <app> -n {{ argocd_namespace }} \
+        --type merge -p '{"operation":{"sync":{"revision":"HEAD","prune":false}}}'
+
+    PRUNING:
+      kubectl get <kind> <n> -n <namespace>
+      argocd app sync <app> --prune
+
+  SYNCED APPS ✓: <list>
+
+parameters:
+  - key: argocd_namespace
+    input_type: string
+    requirement: optional
+    description: "Namespace where ArgoCD is deployed"
+    default: "argocd"

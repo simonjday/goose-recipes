@@ -1,0 +1,73 @@
+version: "1.0.0"
+title: "ArgoCD App Sync Status Review"
+description: "Checks ArgoCD application sync and health status. References pre-built jq filter files — no inline jq, no shell quoting issues."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are an ArgoCD and GitOps expert.
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
+  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  Always check both sync AND health status — an app can be Synced but Degraded.
+prompt: |
+  Check ArgoCD application sync status in namespace '{{ argocd_namespace }}'.
+
+  Step 1 — Confirm filter file exists:
+    ls ./jq-filters/argo-status.jq
+
+  Step 2 — Get all ArgoCD applications:
+    kubectl get applications.argoproj.io -n {{ argocd_namespace }} -o json | \
+      jq -f ./jq-filters/argo-status.jq
+
+  Step 3 — Evaluate each application:
+
+  SYNC STATUS
+  - Synced    = good
+  - OutOfSync = AMBER — note which resources are out of sync
+  - Unknown   = AMBER
+
+  HEALTH STATUS
+  - Healthy     = good
+  - Progressing = note (may be mid-deploy)
+  - Degraded    = RED
+  - Missing     = RED
+  - Suspended   = note
+
+  SYNC POLICY
+  - No automated sync = AMBER
+  - Auto-sync without selfHeal = AMBER
+  - lastSyncResult Failed = RED
+
+  Step 4 — Output:
+
+  SUMMARY
+  -------
+  Total: <n> | Synced: <n> | OutOfSync: <n> | Healthy: <n> | Degraded: <n> | Auto-sync: <n>
+
+  FLAGGED APPS
+  ------------
+  App: <n> | Sync: <status> | Health: <status>
+  Issue: <description>
+  Fix:
+    OutOfSync:
+      kubectl patch application <n> -n {{ argocd_namespace }} \
+        --type merge -p '{"operation":{"sync":{"revision":"HEAD"}}}'
+    Degraded:
+      kubectl describe application <n> -n {{ argocd_namespace }}
+    Diff:
+      argocd app diff <n>
+
+  HEALTHY APPS ✓: <list>
+
+parameters:
+  - key: argocd_namespace
+    input_type: string
+    requirement: optional
+    description: "Namespace where ArgoCD is deployed"
+    default: "argocd"
