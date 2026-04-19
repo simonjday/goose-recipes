@@ -80,7 +80,7 @@ goose run --model qwen3-coder:30b \
   --recipe k8s-pod-review.yaml \
   --params namespace=my-app \
   --no-session \
-  > ./pod-review-my-app-$(date +%Y%m%d).txt 2>&1
+  > ./pod-review-my-app-$(date +%Y%m%d).md 2>&1
 ```
 
 To see what parameters a recipe accepts, check the `parameters:` block at the bottom of its YAML file — each entry shows the key name, default value, and a description.
