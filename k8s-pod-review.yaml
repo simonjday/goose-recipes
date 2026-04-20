@@ -8,68 +8,90 @@ extensions:
     bundled: true
 instructions: |
   You are a Kubernetes reliability and security expert.
-
   STRICT RULE — NO INLINE JQ: You must NEVER write your own jq expressions.
-  The filter files in ./jq-filters/ already handle all the data extraction.
-  Your only job is to run the exact commands shown in the prompt steps and interpret the results.
-  If a command returns an error, report it and move on — do not attempt to fix or rewrite the command.
+  STRICT RULE — TRUST THE FILTER: The "findings" array is computed by jq and is always correct.
+    If findings[] is empty ([]), the pod has ZERO issues from the filter checks.
+    If findings[] has entries, copy them exactly. Do NOT re-read container fields.
+  STRICT RULE — VERDICT IS BASED ON FINDINGS ONLY:
+    PASS = findings[] is empty AND no [PDB] finding was added
+    FAIL = findings[] has ANY entries OR a [PDB] finding was added
+    "PDB not required" does NOT make a pod PASS if it has findings.
+    A Job pod with findings is FAIL. A single-replica pod with findings is FAIL.
+  STRICT RULE — USE pod.name for headings. STRICT RULE — NO RECALCULATION of summary counts.
+  Do NOT run any shell commands beyond what is listed in the steps.
 
 prompt: |
   Review pods in namespace '{{ namespace }}' against Kubernetes best practices.
   Run every step in order. Do not skip steps. Do not write new jq or shell commands.
 
   Step 1 — Confirm filter files are present:
-    ls ./jq-filters/pod-review.jq
-    ls ./jq-filters/pdb-check.jq
+    ls ./jq-filters/pod-review.jq ./jq-filters/pdb-pod-match.jq
 
-  Step 2 — Get pod data (use this exact command, do not modify it):
+  Step 2 — Get pod data with pre-computed findings:
     kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/pod-review.jq
 
-  Step 3 — Get PDB data (use this exact command, do not modify it):
-    kubectl get pdb -n {{ namespace }} -o json | jq -f ./jq-filters/pdb-check.jq
+  Step 3 — Get PDB selector values:
+    kubectl get pdb -n {{ namespace }} -o json | jq -f ./jq-filters/pdb-pod-match.jq
 
-  Step 4 — Get deployment replica counts to identify multi-replica workloads:
+  Step 4 — Get deployment replica counts:
     kubectl get deployments,statefulsets -n {{ namespace }} \
       -o jsonpath='{range .items[*]}{.metadata.name}{" replicas="}{.spec.replicas}{"\n"}{end}'
 
-  Step 5 — Using ONLY the data returned in steps 2, 3 and 4, evaluate each pod:
+  Step 5 — Build a PDB coverage map from Steps 3 and 4 BEFORE processing any pods.
+    For each deployment in Step 4:
+      replicas == 1 → pdb_exempt (PDB not required)
+      replicas > 1  → check if workload name appears exactly in any PDB selector_values
+                       match found  → covered by <pdb_name>
+                       no match     → missing
+    Job/CronJob pods (is_job == true) → pdb_exempt
 
-  For each pod from Step 2 check:
-    RESOURCES:  hasRequests=false or hasLimits=false on any container = FAIL
-    PROBES:     hasLiveness=false or hasReadiness=false on any container = FAIL
-    IMAGE TAG:  image ends in ":latest" or has no tag (no ":" in image name) = FAIL
-    PULL POLICY: pullPolicy=Always AND image tag is latest = extra flag
-    SECURITY (container): runAsNonRoot=false OR allowPrivEsc=true OR readOnlyRoot=false = FAIL
-    SECURITY (pod): podSecCtx.runAsNonRoot=false = FAIL
-    PDB: check if any PDB selector from Step 3 matches this pod's name pattern
-         AND workload from Step 4 has replicas > 1 = FAIL if no match
+    Expected map for goose-test:
+      good-app   = covered by good-app-pdb  (selector_values: ["good-app"])
+      bad-app    = missing                  ("bad-app" not in ["good-app"])
+      ugly-app   = missing                  ("ugly-app" not in ["good-app"])
+      single-app = pdb_exempt               (replicas=1)
 
-  Step 6 — Output the report:
+  Step 6 — For each pod determine verdict using this EXACT logic:
+    has_findings = (pod.findings[] is not empty)
+    has_pdb_issue = (pdb coverage map shows "missing" for this pod's workload
+                     AND pod.is_job == false AND replicas > 1)
+    PASS ✓ = (has_findings == false) AND (has_pdb_issue == false)
+    FAIL   = (has_findings == true)  OR  (has_pdb_issue == true)
 
-  For each pod:
-  Pod: <name>
+    IMPORTANT: has_findings is determined ONLY by whether findings[] is empty or not.
+    A pod with findings is FAIL regardless of PDB status.
+    A pod with findings is FAIL even if it is a Job pod or single-replica.
+
+  Step 7 — Output. PASS pods get ONE line only. FAIL pods get full detail.
+
+  For each FAIL pod:
+  ## Pod: <pod.name>
   Findings:
-    - [RESOURCES] <container>: missing cpu/memory requests or limits
-    - [PROBES] <container>: missing livenessProbe or readinessProbe
-    - [IMAGE] <container>: image "<image>" uses latest or untagged
-    - [SECURITY] <container>: allowPrivilegeEscalation=true / runAsNonRoot=false / readOnlyRootFilesystem=false
-    - [PDB] no PodDisruptionBudget covers this workload
+    - <each entry from pod.findings[] — copy verbatim>
+    - [PDB] no PodDisruptionBudget covers this workload  ← only if has_pdb_issue
+  PDB: <coverage map result for this workload>
   Fix:
-    <kubectl patch or yaml snippet for each finding>
+    kubectl patch deployment <pod.workload> -n {{ namespace }} --type='json' -p='[
+      {"op": "add", "path": "/spec/template/spec/containers/0/livenessProbe", "value": {"httpGet": {"path": "/", "port": 80}, "initialDelaySeconds": 30, "periodSeconds": 10}},
+      {"op": "add", "path": "/spec/template/spec/containers/0/readinessProbe", "value": {"httpGet": {"path": "/", "port": 80}, "initialDelaySeconds": 5, "periodSeconds": 5}},
+      {"op": "add", "path": "/spec/template/spec/containers/0/securityContext", "value": {"runAsNonRoot": true, "readOnlyRootFilesystem": true, "allowPrivilegeEscalation": false}}
+    ]'
 
-  If no findings: Pod: <name> — PASS ✓
+  For each PASS pod:
+  ## Pod: <pod.name> — PASS ✓
 
-  SUMMARY
+  ## SUMMARY
   -------
-  Pods reviewed: <n>
-  PASS:  <n>
-  FAIL:  <n>
+  Pods reviewed: <summary.total_pods>
+  PASS:  <count the pods in the output above that show "— PASS ✓">
+  FAIL:  <total_pods minus PASS>
   Findings by category:
-    RESOURCES: <n>
-    PROBES:    <n>
-    IMAGE:     <n>
-    SECURITY:  <n>
-    PDB:       <n>
+    RESOURCES:    <summary.resources_findings>
+    PROBES:       <summary.probes_findings>
+    IMAGE:        <summary.image_findings>
+    SECURITY:     <summary.security_findings>
+    SECURITY-POD: <summary.security_pod_findings>
+    PDB:          <count the pods in the output above that have a "- [PDB] no PodDisruptionBudget" line>
 
 parameters:
   - key: namespace

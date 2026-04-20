@@ -12,45 +12,49 @@ instructions: |
   Use jq -f with the pre-built filter files in ./jq-filters/
   Run the exact commands shown in each step. Do not modify or rewrite them.
   If a command errors, report it and continue — do not attempt to fix the jq.
-  Image tag issues are a supply chain risk — 'latest' is mutable and can cause silent version changes.
-  Best practice order: SHA digest > immutable semver tag > named tag > 'latest' (never).
-  IMPORTANT: Use jq -f with the pre-built filter files in ./jq-filters/
-  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  IMPORTANT: After steps 2 and 3 you have ALL the data you need.
+  Do NOT run any further shell commands after step 3.
+  Do NOT write any jq, grep, cut, awk or other commands to process the output.
+  Do NOT recalculate or re-count anything — the filter output contains exact counts.
+  Copy the numbers from the filter output directly into the report — do not derive them yourself.
 prompt: |
   Perform a container image tag audit across {{ scope }}.
 
   Step 1 — Confirm filter files exist:
     ls ./jq-filters/img-audit.jq ./jq-filters/deploy-audit.jq
 
-  Step 2 — Extract all container images using the pre-built filter:
+  Step 2 — Extract and classify all container images:
     {% if scope == "cluster" %}
     kubectl get pods --all-namespaces -o json | jq -f ./jq-filters/img-audit.jq
     {% else %}
     kubectl get pods -n {{ scope }} -o json | jq -f ./jq-filters/img-audit.jq
     {% endif %}
 
-  Step 3 — Get deployment pull policies using the pre-built filter:
+    The filter returns two sections:
+      "summary": pre-counted totals — total_pods, critical, high, ok
+      "pods": each pod with containers, each container has a "classification" field:
+        "CRITICAL-untagged" = bare image name with no tag (e.g. busybox)
+        "CRITICAL-latest"   = image tagged :latest
+        "HIGH"              = named tag, no @sha256: digest
+        "OK"                = digest pinned with @sha256:
+
+  Step 3 — Get deployment pull policies:
     {% if scope == "cluster" %}
     kubectl get deployments --all-namespaces -o json | jq -f ./jq-filters/deploy-audit.jq
     {% else %}
     kubectl get deployments -n {{ scope }} -o json | jq -f ./jq-filters/deploy-audit.jq
     {% endif %}
 
-  Step 4 — Classify each image from the output:
-    CRITICAL = tag is 'latest' or no tag at all (no tag implies latest)
-    HIGH     = named tag present but no @sha256: digest
-    OK       = image contains @sha256: digest
+  Step 4 — YOU NOW HAVE ALL THE DATA. Do not run any more commands.
+    Use the "summary" block from Step 2 for all counts in the report — copy them exactly.
+    Use the "classification" field on each container to populate the findings tables.
+    Both "CRITICAL-untagged" and "CRITICAL-latest" go in the CRITICAL table.
+    Look up pullPolicy from Step 3 by matching deployment name to pod name prefix.
+    If a pod has no matching deployment (e.g. Job, CronJob pods) set Pull Policy to "-".
+    Flag any CRITICAL image with pullPolicy=Always as highest risk.
+    List every pod individually — do not deduplicate or group.
 
-    Rules:
-    - "nginx"                 → CRITICAL (no tag = latest)
-    - "nginx:latest"          → CRITICAL
-    - "nginx:1.25"            → HIGH
-    - "nginx:1.25@sha256:…"   → OK
-    - "registry/img@sha256:…" → OK
-
-    Also flag: CRITICAL image + imagePullPolicy=Always = highest risk
-
-  Step 5 — Output findings:
+  Step 5 — Output:
 
   CONTAINER IMAGE TAG AUDIT
   --------------------------
@@ -58,31 +62,30 @@ prompt: |
 
   SUMMARY
   -------
-  Total images scanned: <n>
-  CRITICAL (latest/untagged): <n>
-  HIGH (named tag, no digest): <n>
-  OK (digest pinned): <n>
+  Total pods scanned: <summary.total_pods from Step 2>
+  CRITICAL (latest/untagged): <summary.critical from Step 2>
+  HIGH (named tag, no digest): <summary.high from Step 2>
+  OK (digest pinned): <summary.ok from Step 2>
 
   CRITICAL IMAGES:
   ----------------
-  Namespace | Pod | Container | Image | Pull Policy
-  <findings or "None found ✓">
+  Namespace | Pod | Container | Image | Classification | Pull Policy
+  <one row per CRITICAL container — findings or "None found ✓">
 
-  Fix — get current digest from running pod:
+  Fix — get current digest from running pod then pin in deployment:
     kubectl get pod <pod> -n <namespace> \
       -o jsonpath='{.status.containerStatuses[0].imageID}'
-  Then pin in deployment:
     image: <registry>/<image>:<tag>@sha256:<digest>
 
   HIGH IMAGES (top 10):
   ----------------------
   Namespace | Pod | Container | Image
-  <findings or "None found ✓">
+  <one row per HIGH container — findings or "None found ✓">
 
   NAMESPACE SUMMARY:
   ------------------
   Namespace | Critical | High | OK | Total
-  <table>
+  <use summary counts from Step 2>
 
   KYVERNO POLICY RECOMMENDATION:
   --------------------------------

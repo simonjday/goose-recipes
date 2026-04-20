@@ -12,8 +12,8 @@ instructions: |
   Use jq -f with the pre-built filter files in ./jq-filters/
   Run the exact commands shown in each step. Do not modify or rewrite them.
   If a command errors, report it and continue — do not attempt to fix the jq.
-  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
-  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  Do NOT run any shell commands beyond what is listed in the steps.
+  Do NOT re-evaluate or re-process data — read it directly from filter output.
   Prioritise StatefulSets (Kafka brokers) as highest risk when missing a PDB.
 prompt: |
   Audit PodDisruptionBudget coverage across {{ scope }}.
@@ -21,7 +21,7 @@ prompt: |
   Step 1 — Confirm filter files exist:
     ls ./jq-filters/workload-filter.jq ./jq-filters/pdb-filter.jq
 
-  Step 2 — Get namespaces (single-line inline jq is safe):
+  Step 2 — Get namespaces:
     {% if scope == "cluster" %}
     kubectl get namespaces -o json | \
       jq -r '.items[] | select(.metadata.name | test("^kube-|^openshift-") | not) | .metadata.name'
@@ -29,39 +29,60 @@ prompt: |
     echo "{{ scope }}"
     {% endif %}
 
-  Step 3 — For each namespace get workloads and PDBs:
+  Step 3 — For each namespace get workloads with replicas > 1:
     kubectl get deployments -n <namespace> -o json | jq -f ./jq-filters/workload-filter.jq
     kubectl get statefulsets -n <namespace> -o json | jq -f ./jq-filters/workload-filter.jq
+
+    The filter already filters to replicas > 1 only and returns:
+      kind, name, namespace, replicas, selector (matchLabels)
+
+  Step 4 — For each namespace get PDBs:
     kubectl get pdb -n <namespace> -o json | jq -f ./jq-filters/pdb-filter.jq
 
-  Step 4 — Match PDBs to workloads by comparing selector labels.
-    Unprotected = replicas > 1 AND no PDB selector matches its labels.
-    Also flag: minAvailable == replicas (misconfigured — blocks all disruptions).
+    Returns: name, namespace, selector (matchLabels), minAvailable, maxUnavailable
 
-  Step 5 — Output:
+  Step 5 — YOU NOW HAVE ALL THE DATA. Do not run any more commands.
+    For each workload from Step 3, determine PDB coverage by label matching:
+    - A workload is PROTECTED if any PDB from Step 4 has a selector that is a
+      subset of the workload's selector matchLabels (i.e. all PDB selector keys/values
+      appear in the workload selector).
+    - A workload is UNPROTECTED if no PDB selector matches.
+    - Also flag MISCONFIGURED: PDB exists but minAvailable == replicas (blocks all disruptions).
+
+    Priority:
+      HIGH   = StatefulSet with replicas > 1, no matching PDB
+      MEDIUM = Deployment with replicas > 1, no matching PDB
+      LOW    = PDB exists but misconfigured
+
+  Step 6 — Output:
 
   PDB COVERAGE AUDIT — {{ scope }}
 
-  SUMMARY: Checked: <n> | Protected: <n> | StatefulSets missing PDB: <n> HIGH | Deployments missing PDB: <n> MEDIUM | Misconfigured: <n> LOW
+  SUMMARY: Checked: <n> | Protected: <n> ✓ | StatefulSets missing PDB: <n> HIGH | Deployments missing PDB: <n> MEDIUM | Misconfigured: <n> LOW
 
   HIGH — StatefulSets missing PDB:
-  <namespace>/<n> (replicas: <n>, labels: <key=value>)
+  <namespace>/<name> (replicas: <n>, selector: <key=value>)
   Fix:
     kubectl apply -f - <<EOF
     apiVersion: policy/v1
     kind: PodDisruptionBudget
     metadata:
-      name: <n>-pdb
+      name: <name>-pdb
       namespace: <namespace>
     spec:
       minAvailable: <replicas - 1>
       selector:
-        matchLabels: <labels>
+        matchLabels: <selector>
     EOF
 
-  MEDIUM — Deployments missing PDB: (same format)
-  MISCONFIGURED PDBs: <namespace>/<pdb>: <issue>
-  PROTECTED ✓: <namespace>/<n> → <pdb-name>
+  MEDIUM — Deployments missing PDB:
+  <same format>
+
+  MISCONFIGURED PDBs:
+  <namespace>/<pdb>: minAvailable=<n> equals replicas=<n> — blocks all voluntary disruptions
+
+  PROTECTED ✓:
+  <namespace>/<name> (replicas: <n>) → covered by <pdb-name>
 
 parameters:
   - key: scope

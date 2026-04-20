@@ -13,8 +13,8 @@ instructions: |
   Run the exact commands shown in each step. Do not modify or rewrite them.
   If a command errors, report it and continue — do not attempt to fix the jq.
   IMPORTANT: This recipe is READ-ONLY — identify candidates, never delete anything.
-  Use jq -f with pre-built filter files in ./jq-filters/
-  Do NOT write inline jq — always reference the filter files with jq -f <path>.
+  Do NOT run any shell commands beyond what is listed in the steps.
+  Do NOT compute set differences yourself — compare lists by reading them directly.
   Never flag TLS secrets (type=kubernetes.io/tls) as candidates for deletion.
 prompt: |
   Identify stale resources in namespace '{{ namespace }}' for safe cleanup.
@@ -29,31 +29,50 @@ prompt: |
 
   Step 2 — Find completed and failed Jobs:
     kubectl get jobs -n {{ namespace }} -o json | jq -f ./jq-filters/jobs-filter.jq
-    Flag: succeeded > 0 AND completionTime > {{ max_job_age_hours }}h ago = COMPLETED
-    Flag: failed > 0 AND active == 0 = FAILED
+    Record this as JOB_LIST.
+    Flag as COMPLETED: succeeded > 0 AND completionTime is not null
+    Flag as FAILED: failed > 0 AND active == 0 AND succeeded == 0
 
   Step 3 — Find Pods in terminal states:
     kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/terminal-pods.jq
+    Record this as TERMINAL_PODS. These are all candidates for deletion.
 
-  Step 4 — Find unused ConfigMaps:
+  Step 4 — Get all ConfigMaps (excluding system ones):
     kubectl get configmaps -n {{ namespace }} -o json | jq -f ./jq-filters/configmaps-filter.jq
+    Record this as ALL_CMS — a list of {name, created}.
+
+  Step 5 — Get ConfigMaps currently referenced by running pods:
     kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/pod-cm-refs.jq
-    ConfigMaps in first list NOT in second AND older than {{ max_unused_age_days }} days = UNUSED
+    Record this as USED_CMS — a flat list of ConfigMap name strings.
 
-  Step 5 — Find unused Secrets (TLS excluded by filter):
+  Step 6 — Get all Secrets (TLS and service-account tokens already excluded by filter):
     kubectl get secrets -n {{ namespace }} -o json | jq -f ./jq-filters/secrets-filter.jq
-    kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/pod-secret-refs.jq
-    Secrets in first list NOT in second AND older than {{ max_unused_age_days }} days = UNUSED
+    Record this as ALL_SECRETS — a list of {name, type, created}.
 
-  Step 6 — Output summary and commented cleanup script:
+  Step 7 — Get Secrets currently referenced by running pods:
+    kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/pod-secret-refs.jq
+    Record this as USED_SECRETS — a flat list of Secret name strings.
+
+  Step 8 — YOU NOW HAVE ALL THE DATA. Do not run any more commands.
+    Identify unused ConfigMaps: names in ALL_CMS that do NOT appear in USED_CMS.
+    Identify unused Secrets: names in ALL_SECRETS that do NOT appear in USED_SECRETS.
+    Go through each item in ALL_CMS one by one — if its name is not in the USED_CMS list, it is UNUSED.
+    Go through each item in ALL_SECRETS one by one — if its name is not in the USED_SECRETS list, it is UNUSED.
+    Do not write any code or jq to do this — read the two lists and compare them directly.
+
+  Step 9 — Output summary and commented cleanup script:
 
   STALE RESOURCE REPORT — {{ namespace }}
   ----------------------------------------
-  Completed Jobs (>{{ max_job_age_hours }}h): <n>
-  Failed Jobs: <n> | Terminal Pods: <n>
-  Unused ConfigMaps: <n> | Unused Secrets (non-TLS): <n>
+  Completed Jobs: <n>
+  Failed Jobs: <n>
+  Terminal Pods: <n>
+  Unused ConfigMaps: <n>
+  Unused Secrets (non-TLS): <n>
 
-  KIND | NAME | AGE | REASON | ACTION (DELETE/REVIEW/SKIP)
+  FINDINGS
+  --------
+  KIND | NAME | AGE | REASON | ACTION
 
   CLEANUP SCRIPT (review every line — all commands commented out):
   #!/bin/zsh
@@ -73,13 +92,3 @@ parameters:
     requirement: optional
     description: "Namespace to scan for stale resources"
     default: "confluent"
-  - key: max_job_age_hours
-    input_type: string
-    requirement: optional
-    description: "Completed jobs older than this many hours are flagged"
-    default: "24"
-  - key: max_unused_age_days
-    input_type: string
-    requirement: optional
-    description: "Unused ConfigMaps/Secrets older than this many days are flagged"
-    default: "7"
