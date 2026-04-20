@@ -92,6 +92,91 @@ grep -A4 "parameters:" ~/goose-recipes/<recipe>.yaml
 
 ---
 
+## Parameter Name Cheat Sheet
+
+Recipes use either `namespace` or `scope` as their primary parameter — not all use the same name. Using the wrong one causes the recipe to silently fall back to its default namespace.
+
+| Recipe | Correct param | Example |
+|---|---|---|
+| `k8s-pod-review.yaml` | `namespace` | `--params namespace=goose-test` |
+| `daily-cluster-health.yaml` | `namespace` | `--params namespace=goose-test` |
+| `stale-resource-cleanup.yaml` | `namespace` | `--params namespace=goose-test` |
+| `kyverno-policy-adherence.yaml` | `namespace` | `--params namespace=goose-test` |
+| `kyverno-policy-coverage.yaml` | `namespace` | `--params namespace=goose-test` |
+| `kyverno-exception-audit.yaml` | `max_exception_age_days` | `--params max_exception_age_days=60` |
+| `confluent-component-health.yaml` | `namespace` | `--params namespace=goose-test` |
+| `argocd-sync-status.yaml` | `argocd_namespace` | `--params argocd_namespace=argocd` |
+| `argocd-drift-report.yaml` | `argocd_namespace` | `--params argocd_namespace=argocd` |
+| `mtls-cert-expiry.yaml` | `namespaces` (space-separated) | `--params "namespaces=confluent kafka"` |
+| `image-tag-audit.yaml` | `scope` | `--params scope=goose-test` |
+| `pdb-coverage.yaml` | `scope` | `--params scope=goose-test` |
+| `pvc-health.yaml` | `scope` | `--params scope=goose-test` |
+| `namespace-resource-quota.yaml` | `scope` | `--params scope=goose-test` |
+| `node-capacity-planning.yaml` | `warn_threshold` / `critical_threshold` | `--params warn_threshold=70` |
+
+---
+
+## Testing Recipes — goose-test Namespace
+
+A purpose-built namespace with sample resources lets you test recipes without touching production namespaces. Each resource is deliberately good or bad to exercise specific recipe checks.
+
+### What's in the namespace
+
+| Resource | Kind | Replicas | Purpose |
+|---|---|---|---|
+| `good-app` | Deployment | 3 | Passes all pod-review checks — pinned tag, resources, probes, security ctx |
+| `good-app-pdb` | PodDisruptionBudget | — | Covers `good-app` — pdb-coverage should show as protected |
+| `bad-app` | Deployment | 2 | Fails: `nginx:latest` + `Always` pull, no probes, no security ctx, no PDB |
+| `ugly-app` | Deployment | 2 | Fails: untagged `busybox`, no probes, no security ctx, no PDB |
+| `single-app` | Deployment | 1 | Single replica — should NOT be flagged for missing PDB |
+| `completed-job` | Job | — | Succeeded job — flagged by stale-resource-cleanup |
+| `scheduled-job` | CronJob | — | CronJob present |
+| `app-config` | ConfigMap | — | Used by `good-app` — should NOT be flagged as stale |
+| `stale-config` | ConfigMap | — | Not referenced by any pod — flagged by stale-resource-cleanup |
+| `app-secret` | Secret | — | Used by `good-app` — should NOT be flagged as stale |
+| `unused-secret` | Secret | — | Not referenced by any pod — flagged by stale-resource-cleanup |
+| `goose-test-quota` | ResourceQuota | — | Present — namespace-resource-quota shows as covered |
+| `goose-test-limits` | LimitRange | — | Present — namespace-resource-quota shows as covered |
+
+### Expected results per recipe
+
+| Recipe | Command | Expected |
+|---|---|---|
+| `k8s-pod-review` | `--params namespace=goose-test` | `good-app` PASS, `bad-app` + `ugly-app` FAIL |
+| `image-tag-audit` | `--params scope=goose-test` | `bad-app` CRITICAL (latest), `ugly-app` CRITICAL (untagged) |
+| `pdb-coverage` | `--params scope=goose-test` | `good-app` protected, `bad-app` + `ugly-app` missing PDB |
+| `stale-resource-cleanup` | `--params namespace=goose-test` | `completed-job`, `stale-config`, `unused-secret` flagged |
+| `namespace-resource-quota` | `--params scope=goose-test` | Quota and LimitRange present, usage shown |
+
+### Apply the test namespace
+
+```zsh
+# First time setup
+kubectl apply -f ~/goose-recipes/goose-test-manifests.yaml
+
+# Tear down and reapply cleanly
+kubectl delete namespace goose-test
+kubectl apply -f ~/goose-recipes/goose-test-manifests.yaml
+```
+
+> **Note:** The manifest includes `app` and `env` labels on all pod templates and minimal resource limits on deliberately-bad workloads (`ugly-app`, Job, CronJob) to satisfy Kyverno `require-pod-labels` and `require-resource-limits` enforce policies. The resources are still bad in the ways the recipes check — no probes, no security context, untagged/latest images.
+
+### Run all test recipes in one pass
+
+```zsh
+NS=goose-test
+MODEL=qwen3-coder:30b
+RECIPES=~/goose-recipes
+
+goose run --model $MODEL --recipe $RECIPES/k8s-pod-review.yaml         --params namespace=$NS --no-session
+goose run --model $MODEL --recipe $RECIPES/image-tag-audit.yaml        --params scope=$NS     --no-session
+goose run --model $MODEL --recipe $RECIPES/pdb-coverage.yaml           --params scope=$NS     --no-session
+goose run --model $MODEL --recipe $RECIPES/stale-resource-cleanup.yaml --params namespace=$NS --no-session
+goose run --model $MODEL --recipe $RECIPES/namespace-resource-quota.yaml --params scope=$NS   --no-session
+```
+
+---
+
 ## Recipe Library
 
 ### Previously Built
@@ -757,6 +842,8 @@ Recipes that have been updated with jq filtering: all recipes in this library. I
 | Mac overheating / fans | Switch to `gemma4:latest`, use split script with `sleep 30` between sections, schedule via launchd at 07:00 |
 | Ollama drops connection | Set `export OLLAMA_KEEP_ALIVE=30m` in `~/.zshrc` and restart `ollama serve` |
 | `Stream stalled: no data for 30s` | Recipe passing raw `-o json` to model — add `\| jq '[...]'` filter to all kubectl calls; see Avoiding Stream Stall Errors section above |
+| Wrong namespace used | Check param name — recipes use either `namespace` or `scope`, not both. See Parameter Name Cheat Sheet above |
+| `can't open input file: ./cert-check.sh` | Running from Desktop or wrong directory — use absolute path: `zsh ~/git/goose-recipes/cert-check.sh` |
 
 ---
 

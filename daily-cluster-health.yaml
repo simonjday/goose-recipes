@@ -58,16 +58,10 @@ prompt: |
     Flag: Enforce mode failures = RED | Audit mode failures = AMBER
 
   Step 7 — CERT EXPIRY ({{ namespace }}):
-    kubectl get secrets -n {{ namespace }} \
-      --field-selector type=kubernetes.io/tls \
-      -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | \
-    while read s; do
-      expiry=$(kubectl get secret "$s" -n {{ namespace }} \
-        -o jsonpath='{.data.tls\.crt}' | base64 -d | \
-        openssl x509 -noout -enddate 2>/dev/null | cut -d= -f2)
-      echo "$s: $expiry"
-    done
-    Flag: expiry within 7 days = RED | within 30 days = AMBER
+    zsh ./cert-check.sh {{ namespace }}
+    (returns: STATUS|namespace|secret|key|days_remaining|expiry_date per cert, then a SUMMARY line)
+    Flag: RED (≤7 days) = RED | AMBER (≤30 days) = AMBER
+    Note: covers both kubernetes.io/tls secrets and Opaque secrets containing ca.crt
 
   Step 8 — PRODUCE FINAL REPORT (MANDATORY — run this regardless of findings above):
 

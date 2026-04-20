@@ -1,0 +1,373 @@
+# goose-test namespace — sample resources for testing Goose recipes
+#
+# What each resource exercises:
+#   good-app      — passes pod-review: pinned tag, resources, probes, security ctx, PDB, 3 replicas
+#   bad-app       — fails: latest tag + Always pull policy, no probes, no security ctx, no PDB
+#   ugly-app      — fails: untagged image, no probes, no security ctx, no PDB
+#                   (has minimal resources to satisfy Kyverno require-resource-limits policy)
+#   single-app    — single replica, no PDB needed (should not be flagged)
+#   completed-job — stale-resource-cleanup: succeeded job
+#   scheduled-job — CronJob present
+#   stale-config  — unused ConfigMap (no pod references it)
+#   unused-secret — unused Secret (no pod references it)
+#   app-config    — used ConfigMap (referenced by good-app)
+#   app-secret    — used Secret (referenced by good-app)
+#   goose-test-quota  — ResourceQuota (namespace-resource-quota recipe)
+#   goose-test-limits — LimitRange (namespace-resource-quota recipe)
+#   good-app-pdb  — PDB covering good-app (pdb-coverage recipe)
+#
+# NOTE: All pod templates carry app + env labels to satisfy the
+#       require-pod-labels Kyverno policy on this cluster.
+#       ugly-app and the Job/CronJob carry minimal resource limits to satisfy
+#       require-resource-limits, but remain bad in the ways recipes check
+#       (no probes, no security context, untagged/latest image).
+#
+# Apply with:
+#   kubectl apply -f goose-test-manifests.yaml
+#
+# Tear down with:
+#   kubectl delete namespace goose-test
+#
+# Run recipes against it with:
+#   goose run --model qwen3-coder:30b --recipe k8s-pod-review.yaml --params namespace=goose-test --no-session
+#   goose run --model qwen3-coder:30b --recipe pdb-coverage.yaml --params scope=goose-test --no-session
+#   goose run --model qwen3-coder:30b --recipe image-tag-audit.yaml --params scope=goose-test --no-session
+#   goose run --model qwen3-coder:30b --recipe stale-resource-cleanup.yaml --params namespace=goose-test --no-session
+#   goose run --model qwen3-coder:30b --recipe namespace-resource-quota.yaml --params scope=goose-test --no-session
+
+---
+# ── Namespace ─────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: goose-test
+---
+# ── ConfigMaps ────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: goose-test
+data:
+  ENV: production
+  LOG_LEVEL: info
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: stale-config
+  namespace: goose-test
+data:
+  OLD_KEY: old-value
+---
+# ── Secrets ───────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secret
+  namespace: goose-test
+type: Opaque
+stringData:
+  DB_PASSWORD: s3cr3t
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: unused-secret
+  namespace: goose-test
+type: Opaque
+stringData:
+  OLD_TOKEN: abc123
+---
+# ── GOOD deployment ───────────────────────────────────────────────────────────
+# Passes pod-review: pinned tag, resources, probes, security context
+# Has a PDB covering it
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: good-app
+  namespace: goose-test
+  labels:
+    app: good-app
+    env: test
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: good-app
+  template:
+    metadata:
+      labels:
+        app: good-app
+        env: test
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: good-app
+          image: nginx:1.25.3
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+          envFrom:
+            - configMapRef:
+                name: app-config
+          env:
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: app-secret
+                  key: DB_PASSWORD
+---
+# ── PDB for good-app ──────────────────────────────────────────────────────────
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: good-app-pdb
+  namespace: goose-test
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: good-app
+---
+# ── BAD deployment ────────────────────────────────────────────────────────────
+# Fails: latest tag + Always pull, no probes, no security ctx, 2 replicas + no PDB
+# Has resources to satisfy Kyverno require-resource-limits
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bad-app
+  namespace: goose-test
+  labels:
+    app: bad-app
+    env: test
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bad-app
+  template:
+    metadata:
+      labels:
+        app: bad-app
+        env: test
+    spec:
+      containers:
+        - name: bad-app
+          image: nginx:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+# ── UGLY deployment ───────────────────────────────────────────────────────────
+# Fails: untagged image, no probes, no security ctx, 2 replicas + no PDB
+# Has minimal resources to satisfy Kyverno require-resource-limits
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ugly-app
+  namespace: goose-test
+  labels:
+    app: ugly-app
+    env: test
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ugly-app
+  template:
+    metadata:
+      labels:
+        app: ugly-app
+        env: test
+    spec:
+      containers:
+        - name: ugly-app
+          image: busybox
+          command: ["sh", "-c", "while true; do sleep 30; done"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+---
+# ── Single replica deployment ─────────────────────────────────────────────────
+# 1 replica — should NOT be flagged for missing PDB
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: single-app
+  namespace: goose-test
+  labels:
+    app: single-app
+    env: test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: single-app
+  template:
+    metadata:
+      labels:
+        app: single-app
+        env: test
+    spec:
+      containers:
+        - name: single-app
+          image: nginx:1.25.3
+          ports:
+            - containerPort: 80
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+---
+# ── Services ──────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: good-app-svc
+  namespace: goose-test
+spec:
+  selector:
+    app: good-app
+  ports:
+    - port: 80
+      targetPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bad-app-svc
+  namespace: goose-test
+spec:
+  selector:
+    app: bad-app
+  ports:
+    - port: 80
+      targetPort: 80
+---
+# ── Completed Job ─────────────────────────────────────────────────────────────
+# For stale-resource-cleanup recipe — a succeeded job
+# Has app + env labels and resource limits to satisfy Kyverno policies
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: completed-job
+  namespace: goose-test
+spec:
+  template:
+    metadata:
+      labels:
+        app: completed-job
+        env: test
+    spec:
+      containers:
+        - name: job
+          image: busybox
+          command: ["sh", "-c", "echo done"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+      restartPolicy: Never
+  backoffLimit: 0
+---
+# ── CronJob ───────────────────────────────────────────────────────────────────
+# Has app + env labels and resource limits to satisfy Kyverno policies
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scheduled-job
+  namespace: goose-test
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            app: scheduled-job
+            env: test
+        spec:
+          containers:
+            - name: cron
+              image: busybox
+              command: ["sh", "-c", "echo tick"]
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 16Mi
+                limits:
+                  cpu: 50m
+                  memory: 32Mi
+          restartPolicy: Never
+---
+# ── ResourceQuota ─────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: goose-test-quota
+  namespace: goose-test
+spec:
+  hard:
+    requests.cpu: "4"
+    requests.memory: 4Gi
+    limits.cpu: "8"
+    limits.memory: 8Gi
+    pods: "20"
+---
+# ── LimitRange ────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: goose-test-limits
+  namespace: goose-test
+spec:
+  limits:
+    - default:
+        cpu: "500m"
+        memory: 256Mi
+      defaultRequest:
+        cpu: 100m
+        memory: 128Mi
+      type: Container
