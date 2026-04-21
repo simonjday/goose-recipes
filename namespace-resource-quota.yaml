@@ -12,43 +12,128 @@ instructions: |
   Use jq -f with the pre-built filter files in ./jq-filters/
   Run the exact commands shown in each step. Do not modify or rewrite them.
   If a command errors, report it and continue — do not attempt to fix the jq.
-  IMPORTANT: Use jq -f with pre-built filter files in ./jq-filters/
-  Do NOT write inline jq — always reference the filter files with jq -f <path>.
-  Exclude system namespaces from gap analysis.
+  Do NOT loop over namespaces one at a time — use a single kubectl command per resource type.
+  Do NOT write shell loops, arithmetic, or inline jq.
+  Do NOT write to /tmp files or use echo/printf to produce the report.
+  Produce the final report as your text response only.
+  If a step returns an empty array [] that is a valid result — do not retry it.
+  IMPORTANT: The scope parameter controls whether commands target one namespace or all.
+  Run ONLY the command shown for the current scope — do not run both variants.
 prompt: |
   Audit ResourceQuota and LimitRange configuration across {{ scope }}.
 
   Step 1 — Confirm filter files exist:
-    ls ./jq-filters/quota-filter.jq ./jq-filters/limitrange-filter.jq
+    ls ./jq-filters/quota-filter.jq ./jq-filters/limitrange-filter.jq ./jq-filters/quota-usage.jq
 
-  Step 2 — Get non-system namespaces (single-line inline jq is safe):
+  Step 2 — Determine namespaces in scope:
+    {% if scope == "cluster" %}
     kubectl get namespaces -o json | \
       jq -r '.items[] | select(.metadata.name | test("^kube-|^openshift-") | not) | .metadata.name'
+    Record the full list as NAMESPACES.
+    {% else %}
+    Scope is a single namespace: {{ scope }}. Set NAMESPACES = [{{ scope }}]. No shell command needed.
+    {% endif %}
 
-  Step 3 — For each namespace check ResourceQuota and LimitRange:
-    kubectl get resourcequota -n <namespace> -o json | jq -f ./jq-filters/quota-filter.jq
-    kubectl get limitrange -n <namespace> -o json | jq -f ./jq-filters/limitrange-filter.jq
-    (empty array = missing, flag AMBER)
+  Step 3 — Get ResourceQuotas:
+    {% if scope == "cluster" %}
+    kubectl get resourcequota --all-namespaces -o json | jq -f ./jq-filters/quota-filter.jq
+    {% else %}
+    kubectl get resourcequota -n {{ scope }} -o json | jq -f ./jq-filters/quota-filter.jq
+    {% endif %}
+    Record as QUOTA_DATA. Empty array [] = none found.
 
-  Step 4 — Check OpenShift ClusterResourceQuota if applicable:
+  Step 4 — Get LimitRanges:
+    {% if scope == "cluster" %}
+    kubectl get limitrange --all-namespaces -o json | jq -f ./jq-filters/limitrange-filter.jq
+    {% else %}
+    kubectl get limitrange -n {{ scope }} -o json | jq -f ./jq-filters/limitrange-filter.jq
+    {% endif %}
+    Record as LIMITRANGE_DATA. Empty array [] = none found.
+
+  Step 5 — Get quota usage details:
+    {% if scope == "cluster" %}
+    kubectl get resourcequota --all-namespaces -o json | jq -f ./jq-filters/quota-usage.jq
+    {% else %}
+    kubectl get resourcequota -n {{ scope }} -o json | jq -f ./jq-filters/quota-usage.jq
+    {% endif %}
+    Record as USAGE_DATA.
+    The filter returns used and hard values as strings (e.g. "1200m", "8", "1472Mi", "8Gi").
+    Do NOT calculate percentages. Classify usage by reading the values directly:
+      - used value clearly close to or exceeding hard value = AMBER or RED
+      - used value well below hard value = GREEN
+      - when in doubt report raw used/hard values and mark as REVIEW
+
+  Step 6 — Check OpenShift ClusterResourceQuota if applicable:
     kubectl get appliedclusterresourcequota -o json 2>/dev/null | \
       jq '[.items[] | {name: .metadata.name, hard: .spec.quota.hard, used: .status.total.used}]'
+    Empty result or error = not applicable, skip.
 
-  Step 5 — Calculate usage %: pct = used/hard * 100. > 95% = RED, > 80% = AMBER.
-
-  Step 6 — Output:
+  Step 7 — Using NAMESPACES, QUOTA_DATA, LIMITRANGE_DATA and USAGE_DATA produce the report
+  as your text response. Do NOT use shell commands to output it.
+  Replace ALL placeholder text with actual data — do not copy template text into the output.
 
   RESOURCE QUOTA & LIMITRANGE AUDIT — {{ scope }}
 
-  QUOTA USAGE: Namespace | CPU Used/Hard | Mem Used/Hard | Pods | Status
-  MISSING QUOTAS (AMBER): <list with suggested yaml>
-  MISSING LIMITRANGES (AMBER): <list with suggested yaml>
-  QUOTA PRESSURE (>80%): <namespace>/<resource>: <used>/<hard> (<pct>%)
+  QUOTA USAGE
+  | Namespace | CPU Used/Hard | Mem Used/Hard | Pods Used/Hard | Status |
+  |-----------|--------------|--------------|---------------|--------|
+  (one row per namespace in QUOTA_DATA; use 🟢 GREEN / 🟡 AMBER / 🔴 RED for Status)
+
+  MISSING QUOTAS (AMBER)
+  ----------------------
+  [Instructions only — do not copy this line into output]
+  Find namespaces in NAMESPACES that have no matching entry in QUOTA_DATA.
+  Output the first 5 missing namespaces only, each as:
+    Namespace <n> — no ResourceQuota found
+    kubectl apply -f - <<EOF
+    apiVersion: v1
+    kind: ResourceQuota
+    metadata:
+      name: default-quota
+      namespace: <n>
+    spec:
+      hard:
+        requests.cpu: "2"
+        requests.memory: 2Gi
+        limits.cpu: "4"
+        limits.memory: 4Gi
+        pods: "20"
+    EOF
+  After the 5th entry if more remain: "... and <remaining> more — run with --params scope=<namespace> to fix individually."
+  If none are missing: None ✓
+
+  MISSING LIMITRANGES (AMBER)
+  ---------------------------
+  [Instructions only — do not copy this line into output]
+  Find namespaces in NAMESPACES that have no matching entry in LIMITRANGE_DATA.
+  Output the first 5 missing namespaces only, each as:
+    Namespace <n> — no LimitRange found
+    kubectl apply -f - <<EOFLR
+    apiVersion: v1
+    kind: LimitRange
+    metadata:
+      name: default-limits
+      namespace: <n>
+    spec:
+      limits:
+        - default:
+            cpu: "500m"
+            memory: 256Mi
+          defaultRequest:
+            cpu: 100m
+            memory: 128Mi
+          type: Container
+    EOFLR
+  After the 5th entry if more remain: "... and <remaining> more — run with --params scope=<namespace> to fix individually."
+  If none are missing: None ✓
 
   SUMMARY
   -------
+  Count NAMESPACES for Audited.
+  Count namespaces in QUOTA_DATA for With Quota. Subtract for Missing Quota.
+  Count namespaces in LIMITRANGE_DATA for With LimitRange. Subtract for Missing LR.
   Audited: <n> | With Quota: <n> | Missing Quota: <n> | With LimitRange: <n> | Missing LR: <n>
-  Pressure >80%: <n> AMBER | Critical >95%: <n> RED
+
 
 parameters:
   - key: scope
