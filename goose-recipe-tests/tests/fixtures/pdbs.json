@@ -1,0 +1,16 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "good-app-pdb",
+        "namespace": "goose-test"
+      },
+      "spec": {
+        "minAvailable": 2,
+        "selector": {
+          "matchLabels": {"app": "good-app"}
+        }
+      }
+    }
+  ]
+}

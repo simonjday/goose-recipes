@@ -1,0 +1,34 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "data-pvc",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z"
+      },
+      "spec": {
+        "storageClassName": "standard",
+        "volumeName": "pv-data-001"
+      },
+      "status": {
+        "phase": "Bound",
+        "capacity": {"storage": "10Gi"}
+      }
+    },
+    {
+      "metadata": {
+        "name": "pending-pvc",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z"
+      },
+      "spec": {
+        "storageClassName": "standard",
+        "volumeName": ""
+      },
+      "status": {
+        "phase": "Pending",
+        "capacity": {}
+      }
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+# expected-outputs are generated locally — not committed
+tests/expected-outputs/*.txt
+
+# macOS
+.DS_Store

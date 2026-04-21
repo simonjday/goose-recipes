@@ -1,0 +1,45 @@
+{
+  "items": [
+    {
+      "metadata": {"name": "my-app-synced"},
+      "spec": {
+        "source": {"repoURL": "https://github.com/org/repo", "targetRevision": "HEAD"},
+        "syncPolicy": {"automated": {"selfHeal": true, "prune": true}}
+      },
+      "status": {
+        "sync": {"status": "Synced"},
+        "health": {"status": "Healthy"},
+        "operationState": {"phase": "Succeeded", "finishedAt": "2024-01-01T10:00:00Z"},
+        "resources": []
+      }
+    },
+    {
+      "metadata": {"name": "my-app-drifted"},
+      "spec": {
+        "source": {"repoURL": "https://github.com/org/repo", "targetRevision": "HEAD"},
+        "syncPolicy": {"automated": {"selfHeal": false}}
+      },
+      "status": {
+        "sync": {"status": "OutOfSync"},
+        "health": {"status": "Healthy"},
+        "operationState": {"phase": "Succeeded", "finishedAt": "2024-01-01T08:00:00Z"},
+        "resources": [
+          {"kind": "Deployment", "name": "my-app-drifted", "namespace": "goose-test", "status": "OutOfSync", "requiresPruning": false}
+        ]
+      }
+    },
+    {
+      "metadata": {"name": "my-app-degraded"},
+      "spec": {
+        "source": {"repoURL": "https://github.com/org/repo", "targetRevision": "HEAD"},
+        "syncPolicy": null
+      },
+      "status": {
+        "sync": {"status": "Synced"},
+        "health": {"status": "Degraded"},
+        "operationState": {"phase": "Failed", "finishedAt": "2024-01-01T09:00:00Z"},
+        "resources": []
+      }
+    }
+  ]
+}

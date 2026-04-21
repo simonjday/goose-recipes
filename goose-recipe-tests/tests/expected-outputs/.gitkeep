@@ -1,0 +1,8 @@
+# This directory holds saved recipe outputs used by contract-test.sh.
+# These files are NOT committed to git — generate them locally with:
+#
+#   zsh tests/capture-all.sh
+#
+# or individually:
+#
+#   zsh tests/contract-test.sh capture k8s-pod-review

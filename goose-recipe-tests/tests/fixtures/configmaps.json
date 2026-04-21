@@ -1,0 +1,30 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "app-config",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z",
+        "ownerReferences": []
+      },
+      "data": {"ENV": "production"}
+    },
+    {
+      "metadata": {
+        "name": "stale-config",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z",
+        "ownerReferences": []
+      },
+      "data": {"OLD_KEY": "old-value"}
+    },
+    {
+      "metadata": {
+        "name": "kube-root-ca.crt",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z"
+      },
+      "data": {}
+    }
+  ]
+}

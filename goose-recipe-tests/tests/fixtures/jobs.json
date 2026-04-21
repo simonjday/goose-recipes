@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "completed-job",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z",
+        "ownerReferences": []
+      },
+      "status": {
+        "succeeded": 1,
+        "failed": 0,
+        "active": 0,
+        "completionTime": "2024-01-01T01:00:00Z"
+      }
+    }
+  ]
+}

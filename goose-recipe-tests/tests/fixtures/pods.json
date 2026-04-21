@@ -1,0 +1,155 @@
+{
+  "items": [
+    {
+      "metadata": {
+        "name": "good-app-abc123-xyz",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z"
+      },
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [
+          {
+            "name": "good-app",
+            "ready": true,
+            "restartCount": 0,
+            "lastState": {}
+          }
+        ]
+      },
+      "spec": {
+        "nodeName": "node-1",
+        "securityContext": {
+          "runAsNonRoot": true,
+          "runAsUser": 1000
+        },
+        "volumes": [
+          {"name": "config", "configMap": {"name": "app-config"}},
+          {"name": "secret", "secret": {"secretName": "app-secret"}}
+        ],
+        "containers": [
+          {
+            "name": "good-app",
+            "image": "nginx:1.25.3",
+            "imagePullPolicy": "IfNotPresent",
+            "resources": {
+              "requests": {"cpu": "100m", "memory": "128Mi"},
+              "limits":   {"cpu": "200m", "memory": "256Mi"}
+            },
+            "livenessProbe":  {"httpGet": {"path": "/", "port": 80}},
+            "readinessProbe": {"httpGet": {"path": "/", "port": 80}},
+            "securityContext": {
+              "runAsNonRoot": true,
+              "allowPrivilegeEscalation": false,
+              "readOnlyRootFilesystem": true
+            },
+
+            "envFrom": [{"configMapRef": {"name": "app-config"}}],
+            "env": [
+              {"name": "DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "app-secret", "key": "DB_PASSWORD"}}}
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "name": "bad-app-def456-uvw",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z"
+      },
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [
+          {
+            "name": "bad-app",
+            "ready": true,
+            "restartCount": 20,
+            "lastState": {}
+          }
+        ]
+      },
+      "spec": {
+        "nodeName": "node-1",
+        "securityContext": {},
+        "volumes": [],
+        "containers": [
+          {
+            "name": "bad-app",
+            "image": "nginx:latest",
+            "imagePullPolicy": "Always",
+            "resources": {
+              "requests": {"cpu": "50m", "memory": "64Mi"},
+              "limits":   {"cpu": "100m", "memory": "128Mi"}
+            },
+            "securityContext": {}
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "name": "ugly-app-ghi789-rst",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z"
+      },
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [
+          {
+            "name": "ugly-app",
+            "ready": true,
+            "restartCount": 5,
+            "lastState": {}
+          }
+        ]
+      },
+      "spec": {
+        "nodeName": "node-2",
+        "securityContext": {},
+        "volumes": [],
+        "containers": [
+          {
+            "name": "ugly-app",
+            "image": "busybox",
+            "imagePullPolicy": "IfNotPresent",
+            "resources": {},
+            "securityContext": {}
+          }
+        ]
+      }
+    },
+    {
+      "metadata": {
+        "name": "completed-job-abc",
+        "namespace": "goose-test",
+        "creationTimestamp": "2024-01-01T00:00:00Z"
+      },
+      "status": {
+        "phase": "Succeeded",
+        "containerStatuses": [
+          {
+            "name": "job",
+            "ready": false,
+            "restartCount": 0,
+            "lastState": {}
+          }
+        ]
+      },
+      "spec": {
+        "nodeName": "node-1",
+        "securityContext": {},
+        "volumes": [],
+        "containers": [
+          {
+            "name": "job",
+            "image": "busybox",
+            "imagePullPolicy": "IfNotPresent",
+            "resources": {},
+            "securityContext": {}
+          }
+        ]
+      }
+    }
+  ]
+}

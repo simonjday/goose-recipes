@@ -1,0 +1,34 @@
+{
+  "items": [
+    {
+      "metadata": {"name": "polr-goose-test", "namespace": "goose-test"},
+      "summary": {"pass": 10, "fail": 2, "warn": 0, "skip": 1},
+      "results": [
+        {
+          "policy": "disallow-latest-tag",
+          "rule": "require-image-tag",
+          "result": "fail",
+          "severity": "medium",
+          "message": "Image tag 'latest' is not allowed",
+          "resources": [{"kind": "Pod", "name": "bad-app-def456-uvw", "namespace": "goose-test"}]
+        },
+        {
+          "policy": "require-pod-security",
+          "rule": "restrict-privilege-escalation",
+          "result": "fail",
+          "severity": "high",
+          "message": "allowPrivilegeEscalation must be set to false",
+          "resources": [{"kind": "Pod", "name": "ugly-app-ghi789-rst", "namespace": "goose-test"}]
+        },
+        {
+          "policy": "disallow-latest-tag",
+          "rule": "require-image-tag",
+          "result": "pass",
+          "severity": "medium",
+          "message": "",
+          "resources": [{"kind": "Pod", "name": "good-app-abc123-xyz", "namespace": "goose-test"}]
+        }
+      ]
+    }
+  ]
+}
