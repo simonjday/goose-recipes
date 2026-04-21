@@ -1,154 +1,128 @@
 {
   "items": [
     {
-      "metadata": {
-        "name": "good-app-abc123-xyz",
-        "namespace": "goose-test",
-        "creationTimestamp": "2024-01-01T00:00:00Z"
-      },
+      "metadata": {"name": "bad-app-649bfb75b9-hckxq", "namespace": "goose-test", "creationTimestamp": "2024-01-01T00:00:00Z"},
       "status": {
         "phase": "Running",
-        "containerStatuses": [
-          {
-            "name": "good-app",
-            "ready": true,
-            "restartCount": 0,
-            "lastState": {}
-          }
-        ]
+        "containerStatuses": [{"name": "bad-app", "ready": true, "restartCount": 2, "lastState": {}}]
+      },
+      "spec": {
+        "nodeName": "node-1", "securityContext": {},
+        "volumes": [],
+        "containers": [{
+          "name": "bad-app", "image": "nginx:latest", "imagePullPolicy": "Always",
+          "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "100m", "memory": "128Mi"}},
+          "securityContext": {}
+        }]
+      }
+    },
+    {
+      "metadata": {"name": "bad-app-649bfb75b9-qqfcv", "namespace": "goose-test", "creationTimestamp": "2024-01-01T00:00:00Z"},
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [{"name": "bad-app", "ready": true, "restartCount": 1, "lastState": {}}]
+      },
+      "spec": {
+        "nodeName": "node-1", "securityContext": {},
+        "volumes": [],
+        "containers": [{
+          "name": "bad-app", "image": "nginx:latest", "imagePullPolicy": "Always",
+          "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "100m", "memory": "128Mi"}},
+          "securityContext": {}
+        }]
+      }
+    },
+    {
+      "metadata": {"name": "good-app-69c5b58f6d-9tmxb", "namespace": "goose-test", "creationTimestamp": "2024-01-01T00:00:00Z"},
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [{"name": "good-app", "ready": true, "restartCount": 1, "lastState": {}}]
       },
       "spec": {
         "nodeName": "node-1",
-        "securityContext": {
-          "runAsNonRoot": true,
-          "runAsUser": 1000
-        },
+        "securityContext": {"runAsNonRoot": true, "runAsUser": 1000},
         "volumes": [
           {"name": "config", "configMap": {"name": "app-config"}},
           {"name": "secret", "secret": {"secretName": "app-secret"}}
         ],
-        "containers": [
-          {
-            "name": "good-app",
-            "image": "nginx:1.25.3",
-            "imagePullPolicy": "IfNotPresent",
-            "resources": {
-              "requests": {"cpu": "100m", "memory": "128Mi"},
-              "limits":   {"cpu": "200m", "memory": "256Mi"}
-            },
-            "livenessProbe":  {"httpGet": {"path": "/", "port": 80}},
-            "readinessProbe": {"httpGet": {"path": "/", "port": 80}},
-            "securityContext": {
-              "runAsNonRoot": true,
-              "allowPrivilegeEscalation": false,
-              "readOnlyRootFilesystem": true
-            },
-
-            "envFrom": [{"configMapRef": {"name": "app-config"}}],
-            "env": [
-              {"name": "DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "app-secret", "key": "DB_PASSWORD"}}}
-            ]
-          }
-        ]
+        "containers": [{
+          "name": "good-app", "image": "nginx:1.25.3", "imagePullPolicy": "IfNotPresent",
+          "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "200m", "memory": "256Mi"}},
+          "livenessProbe":  {"httpGet": {"path": "/", "port": 80}},
+          "readinessProbe": {"httpGet": {"path": "/", "port": 80}},
+          "securityContext": {"runAsNonRoot": true, "allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true},
+          "envFrom": [{"configMapRef": {"name": "app-config"}}],
+          "env": [{"name": "DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "app-secret", "key": "DB_PASSWORD"}}}]
+        }]
       }
     },
     {
-      "metadata": {
-        "name": "bad-app-def456-uvw",
-        "namespace": "goose-test",
-        "creationTimestamp": "2024-01-01T00:00:00Z"
-      },
+      "metadata": {"name": "good-app-69c5b58f6d-l79fq", "namespace": "goose-test", "creationTimestamp": "2024-01-01T00:00:00Z"},
       "status": {
         "phase": "Running",
-        "containerStatuses": [
-          {
-            "name": "bad-app",
-            "ready": true,
-            "restartCount": 20,
-            "lastState": {}
-          }
-        ]
-      },
-      "spec": {
-        "nodeName": "node-1",
-        "securityContext": {},
-        "volumes": [],
-        "containers": [
-          {
-            "name": "bad-app",
-            "image": "nginx:latest",
-            "imagePullPolicy": "Always",
-            "resources": {
-              "requests": {"cpu": "50m", "memory": "64Mi"},
-              "limits":   {"cpu": "100m", "memory": "128Mi"}
-            },
-            "securityContext": {}
-          }
-        ]
-      }
-    },
-    {
-      "metadata": {
-        "name": "ugly-app-ghi789-rst",
-        "namespace": "goose-test",
-        "creationTimestamp": "2024-01-01T00:00:00Z"
-      },
-      "status": {
-        "phase": "Running",
-        "containerStatuses": [
-          {
-            "name": "ugly-app",
-            "ready": true,
-            "restartCount": 5,
-            "lastState": {}
-          }
-        ]
+        "containerStatuses": [{"name": "good-app", "ready": true, "restartCount": 8, "lastState": {}}]
       },
       "spec": {
         "nodeName": "node-2",
-        "securityContext": {},
+        "securityContext": {"runAsNonRoot": true, "runAsUser": 1000},
         "volumes": [],
-        "containers": [
-          {
-            "name": "ugly-app",
-            "image": "busybox",
-            "imagePullPolicy": "IfNotPresent",
-            "resources": {},
-            "securityContext": {}
-          }
-        ]
+        "containers": [{
+          "name": "good-app", "image": "nginx:1.25.3", "imagePullPolicy": "IfNotPresent",
+          "resources": {"requests": {"cpu": "100m", "memory": "128Mi"}, "limits": {"cpu": "200m", "memory": "256Mi"}},
+          "livenessProbe":  {"httpGet": {"path": "/", "port": 80}},
+          "readinessProbe": {"httpGet": {"path": "/", "port": 80}},
+          "securityContext": {"runAsNonRoot": true, "allowPrivilegeEscalation": false, "readOnlyRootFilesystem": true}
+        }]
       }
     },
     {
-      "metadata": {
-        "name": "completed-job-abc",
-        "namespace": "goose-test",
-        "creationTimestamp": "2024-01-01T00:00:00Z"
-      },
+      "metadata": {"name": "single-app-65b87fb789-npcsm", "namespace": "goose-test", "creationTimestamp": "2024-01-01T00:00:00Z"},
       "status": {
-        "phase": "Succeeded",
-        "containerStatuses": [
-          {
-            "name": "job",
-            "ready": false,
-            "restartCount": 0,
-            "lastState": {}
-          }
-        ]
+        "phase": "Running",
+        "containerStatuses": [{"name": "single-app", "ready": true, "restartCount": 7, "lastState": {}}]
       },
       "spec": {
-        "nodeName": "node-1",
-        "securityContext": {},
+        "nodeName": "node-1", "securityContext": {},
         "volumes": [],
-        "containers": [
-          {
-            "name": "job",
-            "image": "busybox",
-            "imagePullPolicy": "IfNotPresent",
-            "resources": {},
-            "securityContext": {}
-          }
-        ]
+        "containers": [{
+          "name": "single-app", "image": "nginx:1.25.3", "imagePullPolicy": "IfNotPresent",
+          "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"cpu": "100m", "memory": "128Mi"}},
+          "livenessProbe":  {"httpGet": {"path": "/", "port": 80}},
+          "readinessProbe": {"httpGet": {"path": "/", "port": 80}},
+          "securityContext": {}
+        }]
+      }
+    },
+    {
+      "metadata": {"name": "ugly-app-786c6f5c8d-7m2zf", "namespace": "goose-test", "creationTimestamp": "2024-01-01T00:00:00Z"},
+      "status": {
+        "phase": "Running",
+        "containerStatuses": [{"name": "ugly-app", "ready": true, "restartCount": 2, "lastState": {}}]
+      },
+      "spec": {
+        "nodeName": "node-2", "securityContext": {},
+        "volumes": [],
+        "containers": [{
+          "name": "ugly-app", "image": "busybox", "imagePullPolicy": "Always",
+          "resources": {"requests": {"cpu": "10m", "memory": "16Mi"}, "limits": {"cpu": "50m", "memory": "32Mi"}},
+          "securityContext": {}
+        }]
+      }
+    },
+    {
+      "metadata": {"name": "scheduled-job-29613000-sjdjz", "namespace": "goose-test", "creationTimestamp": "2024-01-01T00:00:00Z"},
+      "status": {
+        "phase": "Succeeded",
+        "containerStatuses": [{"name": "cron", "ready": false, "restartCount": 0, "lastState": {}}]
+      },
+      "spec": {
+        "nodeName": "node-1", "securityContext": {},
+        "volumes": [],
+        "containers": [{
+          "name": "cron", "image": "busybox", "imagePullPolicy": "Always",
+          "resources": {"requests": {"cpu": "10m", "memory": "16Mi"}, "limits": {"cpu": "50m", "memory": "32Mi"}},
+          "securityContext": {}
+        }]
       }
     }
   ]

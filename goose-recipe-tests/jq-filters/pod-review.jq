@@ -1,6 +1,16 @@
-# Returns {summary, pods} — summary gives overall counts, pods gives per-pod detail.
-# Boolean fields use null-safe coalescing: (field | if . == null then default else . end)
-# to correctly handle explicit false values (avoids jq's falsy // operator bug).
+# Returns {summary, pods}
+# Boolean fields use null-safe coalescing to correctly handle explicit false values.
+# A pod "has findings" if any container fails resources, probes, image, or security checks,
+# OR if the pod-level securityContext fails.
+
+def has_findings:
+  (.containers | any(
+    (.hasRequests == false) or (.hasLimits == false) or
+    (.hasLiveness == false) or (.hasReadiness == false) or
+    (.image | test(":latest$") or (contains(":") | not)) or
+    .allowPrivEsc or (.runAsNonRoot == false) or (.readOnlyRoot == false)
+  )) or (.podSecCtx.runAsNonRoot == false);
+
 {
   summary: {
     total_pods: (.items | length),
@@ -22,8 +32,36 @@
     security_pod_findings: ([.items[] | select(
       ((.spec.securityContext.runAsNonRoot) | if . == null then false else . end | not)
     )] | length),
-    pods_with_findings: 0,
-    pods_clean: 0
+    pods_with_findings: ([.items[] | {
+      podSecCtx: {
+        runAsNonRoot: ((.spec.securityContext.runAsNonRoot) | if . == null then false else . end)
+      },
+      containers: [.spec.containers[] | {
+        hasRequests: ((.resources.requests.cpu != null) and (.resources.requests.memory != null)),
+        hasLimits: ((.resources.limits.cpu != null) and (.resources.limits.memory != null)),
+        hasLiveness: (.livenessProbe != null),
+        hasReadiness: (.readinessProbe != null),
+        image: .image,
+        allowPrivEsc: ((.securityContext.allowPrivilegeEscalation) | if . == null then true else . end),
+        runAsNonRoot: ((.securityContext.runAsNonRoot) | if . == null then false else . end),
+        readOnlyRoot: ((.securityContext.readOnlyRootFilesystem) | if . == null then false else . end)
+      }]
+    } | select(has_findings)] | length),
+    pods_clean: ([.items[] | {
+      podSecCtx: {
+        runAsNonRoot: ((.spec.securityContext.runAsNonRoot) | if . == null then false else . end)
+      },
+      containers: [.spec.containers[] | {
+        hasRequests: ((.resources.requests.cpu != null) and (.resources.requests.memory != null)),
+        hasLimits: ((.resources.limits.cpu != null) and (.resources.limits.memory != null)),
+        hasLiveness: (.livenessProbe != null),
+        hasReadiness: (.readinessProbe != null),
+        image: .image,
+        allowPrivEsc: ((.securityContext.allowPrivilegeEscalation) | if . == null then true else . end),
+        runAsNonRoot: ((.securityContext.runAsNonRoot) | if . == null then false else . end),
+        readOnlyRoot: ((.securityContext.readOnlyRootFilesystem) | if . == null then false else . end)
+      }]
+    } | select(has_findings | not)] | length)
   },
   pods: [.items[] | {
     name: .metadata.name,

@@ -26,7 +26,17 @@ REPO_ROOT="$RECIPES_DIR"
 OUTPUTS_DIR="$SCRIPT_DIR/expected-outputs"
 SKIP_RECIPES=(${=SKIP_RECIPES:-})
 
+# Default model for capture runs.
+# qwen3-coder:30b is best for recipes that generate kubectl patches or YAML.
+# gemma4:latest is better (cooler, faster) for summarisation/health-check recipes.
+# Override per-recipe with the MODEL_<recipe> env vars below, or set MODEL= globally.
 MODEL=${MODEL:-qwen3-coder:30b}
+MODEL_k8s_pod_review=${MODEL_k8s_pod_review:-gemma4:latest}
+MODEL_daily_cluster_health=${MODEL_daily_cluster_health:-gemma4:latest}
+MODEL_confluent_component_health=${MODEL_confluent_component_health:-gemma4:latest}
+MODEL_argocd_sync_status=${MODEL_argocd_sync_status:-gemma4:latest}
+MODEL_argocd_drift_report=${MODEL_argocd_drift_report:-gemma4:latest}
+MODEL_mtls_cert_expiry=${MODEL_mtls_cert_expiry:-gemma4:latest}
 NAMESPACE=${NAMESPACE:-goose-test}
 SLEEP_BETWEEN=${SLEEP_BETWEEN:-15}  # seconds between runs (let Ollama cool down)
 
@@ -94,8 +104,12 @@ for entry in "${RECIPES[@]}"; do
   echo "   params: ${params:-none}"
   echo "   output: $output_file"
 
+  # Look up per-recipe model override (replace hyphens with underscores for var name)
+  local recipe_var="MODEL_${recipe//-/_}"
+  local recipe_model="${(P)recipe_var:-$MODEL}"
+
   # Build command
-  cmd=(goose run --model "$MODEL" --recipe "$yaml" --no-session)
+  cmd=(goose run --model "$recipe_model" --recipe "$yaml" --no-session)
   if [[ -n "$params" ]]; then
     # Split params string into array elements properly
     cmd+=("${=params}")

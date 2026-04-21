@@ -143,9 +143,35 @@ zsh tests/contract-test.sh check k8s-pod-review
 # All saved outputs
 zsh tests/contract-test.sh all
 
-# Without LLM judge (pattern checks only — CI safe)
+# Without LLM judge (pattern checks only — always CI safe)
 NO_LLM=true zsh tests/contract-test.sh all
 ```
+
+### LLM judge backends
+
+The judge call is pluggable. Set `LLM_BACKEND` to choose — `auto` (default) tries each in order until one works.
+
+| Backend | How to use | Best for |
+|---|---|---|
+| `auto` | Default — tries anthropic → ollama → goose | Local dev |
+| `ollama` | `LLM_BACKEND=ollama` — uses `OLLAMA_HOST` (default `localhost:11434`) | Local + self-hosted CI |
+| `goose` | `LLM_BACKEND=goose` — runs `goose run --no-session` | Local — zero extra config if goose already works |
+| `anthropic` | `LLM_BACKEND=anthropic ANTHROPIC_API_KEY=sk-...` | GitHub Actions with secret |
+
+```zsh
+# Ollama (no API key — uses your existing OLLAMA_HOST)
+LLM_BACKEND=ollama zsh tests/contract-test.sh all
+
+# Goose + Ollama (uses your existing goose config)
+LLM_BACKEND=goose JUDGE_MODEL=gemma4:latest zsh tests/contract-test.sh all
+
+# Anthropic
+LLM_BACKEND=anthropic ANTHROPIC_API_KEY=sk-... zsh tests/contract-test.sh all
+```
+
+Override the model with `JUDGE_MODEL=<model>`. Defaults per backend:
+- `ollama` / `goose`: `qwen2.5:7b` (fast, low heat, sufficient for YES/NO)
+- `anthropic`: `claude-haiku-4-5-20251001`
 
 ### Contract format
 
@@ -174,12 +200,28 @@ Layers 1 and 2 run without any external dependencies:
 Layer 3 pattern checks also run without a cluster or API key:
 
 ```yaml
-- name: Contract pattern checks
+- name: Contract pattern checks (no LLM)
   run: |
     NO_LLM=true zsh tests/contract-test.sh all
 ```
 
-For the LLM judge in CI, set `ANTHROPIC_API_KEY` as a secret and remove `NO_LLM=true`.
+For the LLM judge in CI, pick your backend:
+
+```yaml
+# Option A — Anthropic (set ANTHROPIC_API_KEY as a repo secret)
+- name: Contract tests (Anthropic judge)
+  env:
+    ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  run: |
+    LLM_BACKEND=anthropic zsh tests/contract-test.sh all
+
+# Option B — Self-hosted Ollama runner (no API key needed)
+- name: Contract tests (Ollama judge)
+  env:
+    OLLAMA_HOST: http://your-ollama-host:11434
+  run: |
+    LLM_BACKEND=ollama JUDGE_MODEL=qwen2.5:7b zsh tests/contract-test.sh all
+```
 
 ---
 
