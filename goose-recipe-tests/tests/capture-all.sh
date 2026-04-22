@@ -8,37 +8,29 @@
 #   - kubectl pointing at a cluster with goose-test namespace running
 #   - goose installed and configured with Ollama
 #   - goose-test-manifests.yaml already applied
+#   - qwen3-coder:30b pulled in Ollama (required — smaller models don't use tools)
 #
 # Usage:
 #   zsh tests/capture-all.sh
 #
-# Individual recipes can be skipped by setting SKIP_RECIPES:
+# Individual recipes can be skipped:
 #   SKIP_RECIPES="daily-cluster-health confluent-component-health" zsh tests/capture-all.sh
+#
+# MODEL NOTE: Only qwen3-coder:30b reliably invokes shell tools.
+# Smaller models (qwen2.5-coder:7b, gemma4) narrate tool calls as text instead
+# of executing them, producing empty or broken captures.
+# Override with MODEL= only if you know your model handles tool use.
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# SCRIPT_DIR = .../goose-recipes/goose-recipe-tests/tests
-# Go up two levels to reach the recipes repo root.
-# Override with: RECIPES_DIR=/path/to/recipes zsh tests/<script>.sh
-RECIPES_DIR="${RECIPES_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
-REPO_ROOT="$RECIPES_DIR"
+REPO_ROOT="${RECIPES_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 OUTPUTS_DIR="$SCRIPT_DIR/expected-outputs"
 SKIP_RECIPES=(${=SKIP_RECIPES:-})
 
-# Default model for capture runs.
-# qwen3-coder:30b is best for recipes that generate kubectl patches or YAML.
-# gemma4:latest is better (cooler, faster) for summarisation/health-check recipes.
-# Override per-recipe with the MODEL_<recipe> env vars below, or set MODEL= globally.
-MODEL=${MODEL:-qwen3-coder:30b}
-MODEL_k8s_pod_review=${MODEL_k8s_pod_review:-gemma4:latest}
-MODEL_daily_cluster_health=${MODEL_daily_cluster_health:-gemma4:latest}
-MODEL_confluent_component_health=${MODEL_confluent_component_health:-gemma4:latest}
-MODEL_argocd_sync_status=${MODEL_argocd_sync_status:-gemma4:latest}
-MODEL_argocd_drift_report=${MODEL_argocd_drift_report:-gemma4:latest}
-MODEL_mtls_cert_expiry=${MODEL_mtls_cert_expiry:-gemma4:latest}
-NAMESPACE=${NAMESPACE:-goose-test}
-SLEEP_BETWEEN=${SLEEP_BETWEEN:-15}  # seconds between runs (let Ollama cool down)
+MODEL="${MODEL:-qwen3-coder:30b}"
+NAMESPACE="${NAMESPACE:-goose-test}"
+SLEEP_BETWEEN="${SLEEP_BETWEEN:-15}"
 
 mkdir -p "$OUTPUTS_DIR"
 
@@ -47,24 +39,26 @@ RED='\033[0;31m'
 YELLOW='\033[0;33m'
 NC='\033[0m'
 
-# ── Recipe list with their param overrides ────────────────────────────────────
-# Format: "recipe_name|--params key=val --params key2=val2"
+# ── Recipe list ───────────────────────────────────────────────────────────────
+# Format: "recipe_name|param_key=val param_key2=val2"
+# Params are passed as --params key=val for each space-separated pair.
+# Use the exact param keys from each recipe's parameters: block.
 RECIPES=(
-  "k8s-pod-review|--params namespace=$NAMESPACE"
-  "pdb-coverage|--params scope=$NAMESPACE"
-  "image-tag-audit|--params scope=$NAMESPACE"
-  "stale-resource-cleanup|--params namespace=$NAMESPACE"
-  "namespace-resource-quota|--params scope=$NAMESPACE"
-  "kyverno-policy-adherence|--params namespace=$NAMESPACE"
-  "kyverno-policy-coverage|--params namespace=$NAMESPACE"
+  "k8s-pod-review|namespace=$NAMESPACE"
+  "pdb-coverage|scope=$NAMESPACE"
+  "image-tag-audit|scope=$NAMESPACE"
+  "stale-resource-cleanup|namespace=$NAMESPACE"
+  "namespace-resource-quota|scope=$NAMESPACE"
+  "kyverno-policy-adherence|namespace=$NAMESPACE"
+  "kyverno-policy-coverage|namespace=$NAMESPACE"
   "kyverno-exception-audit|"
   "argocd-sync-status|"
   "argocd-drift-report|"
   "node-capacity-planning|"
-  "pvc-health|--params scope=$NAMESPACE"
-  "mtls-cert-expiry|--params namespaces=$NAMESPACE"
-  "daily-cluster-health|--params namespace=$NAMESPACE"
-  "confluent-component-health|--params namespace=$NAMESPACE"
+  "pvc-health|scope=$NAMESPACE"
+  "mtls-cert-expiry|namespaces=$NAMESPACE"
+  "daily-cluster-health|namespace=$NAMESPACE"
+  "confluent-component-health|namespace=$NAMESPACE"
 )
 
 PASS=0
@@ -83,10 +77,10 @@ echo ""
 
 for entry in "${RECIPES[@]}"; do
   recipe="${entry%%|*}"
-  params="${entry##*|}"
+  param_str="${entry##*|}"
   yaml="$REPO_ROOT/${recipe}.yaml"
 
-  # Check if should skip
+  # Skip check
   if (( ${SKIP_RECIPES[(Ie)$recipe]} )); then
     echo "${YELLOW}  SKIP${NC}  $recipe (in SKIP_RECIPES)"
     SKIP=$((SKIP+1))
@@ -94,25 +88,23 @@ for entry in "${RECIPES[@]}"; do
   fi
 
   if [[ ! -f "$yaml" ]]; then
-    echo "${YELLOW}  SKIP${NC}  $recipe (yaml not found)"
+    echo "${YELLOW}  SKIP${NC}  $recipe (yaml not found at $yaml)"
     SKIP=$((SKIP+1))
     continue
   fi
 
   output_file="$OUTPUTS_DIR/${recipe}.txt"
   echo "── $recipe ──"
-  echo "   params: ${params:-none}"
+  echo "   model:  $MODEL"
+  echo "   params: ${param_str:-none}"
   echo "   output: $output_file"
 
-  # Look up per-recipe model override (replace hyphens with underscores for var name)
-  local recipe_var="MODEL_${recipe//-/_}"
-  local recipe_model="${(P)recipe_var:-$MODEL}"
-
-  # Build command
-  cmd=(goose run --model "$recipe_model" --recipe "$yaml" --no-session)
-  if [[ -n "$params" ]]; then
-    # Split params string into array elements properly
-    cmd+=("${=params}")
+  # Build --params flags from "key=val key2=val2" string
+  cmd=(goose run --model "$MODEL" --recipe "$yaml" --no-session)
+  if [[ -n "$param_str" ]]; then
+    for pair in ${=param_str}; do
+      cmd+=(--params "$pair")
+    done
   fi
 
   echo "   running..."
@@ -123,11 +115,18 @@ for entry in "${RECIPES[@]}"; do
     elapsed=$((end-start))
     lines=$(wc -l < "$output_file" | tr -d ' ')
     echo "   ${GREEN}done${NC} — ${elapsed}s, ${lines} lines → $output_file"
+
+    # Sanity check: warn if output looks like narrated tool calls (model didn't execute tools)
+    if grep -q '"name": "shell"' "$output_file" 2>/dev/null; then
+      echo "   ${YELLOW}WARN${NC}  Output contains narrated tool calls — model did not execute shell tools."
+      echo "         Try: MODEL=qwen3-coder:30b zsh tests/capture-all.sh"
+    fi
+
     PASS=$((PASS+1))
   else
     end=$(date +%s)
     elapsed=$((end-start))
-    echo "   ${RED}failed${NC} — ${elapsed}s (partial output saved)"
+    echo "   ${RED}failed${NC} — ${elapsed}s (partial output saved to $output_file)"
     FAIL=$((FAIL+1))
   fi
 

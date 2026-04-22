@@ -127,7 +127,8 @@ assert_jq     "summary has resources_findings"    pods.json  pod-review.jq  '.su
 assert_jq     "summary has probes_findings"       pods.json  pod-review.jq  '.summary | has("probes_findings")'
 assert_jq     "summary has image_findings"        pods.json  pod-review.jq  '.summary | has("image_findings")'
 assert_jq     "summary has security_findings"     pods.json  pod-review.jq  '.summary | has("security_findings")'
-assert_jq     "summary total_pods is 7"           pods.json  pod-review.jq  '.summary.total_pods == 7'
+assert_jq     "summary total_pods is 12"          pods.json  pod-review.jq  '.summary.total_pods == 12'
+assert_jq     "summary running_pods is 9"          pods.json  pod-review.jq  '.summary.running_pods == 9'
 # Fixture order: bad-app[0,1], good-app[2,3], single-app[4], ugly-app[5,6]
 assert_jq     "extracts pod name"                      pods.json  pod-review.jq  '.pods[0].name | type == "string"'
 assert_jq     "extracts phase"                         pods.json  pod-review.jq  '.pods[0].phase | . == "Running"'
@@ -150,11 +151,11 @@ assert_jq     "good-app[2]: hasRequests=true"          pods.json  pod-review.jq 
 assert_jq     "good-app[2]: runAsNonRoot=true"         pods.json  pod-review.jq  '.pods[2].containers[0].runAsNonRoot == true'
 assert_jq     "good-app[2]: allowPrivEsc=false"        pods.json  pod-review.jq  '.pods[2].containers[0].allowPrivEsc == false'
 assert_jq     "good-app[2]: readOnlyRoot=true"         pods.json  pod-review.jq  '.pods[2].containers[0].readOnlyRoot == true'
-assert_jq     "ugly-app[5]: hasLiveness=false"         pods.json  pod-review.jq  '.pods[5].containers[0].hasLiveness == false'
-assert_jq     "ugly-app[5]: image is untagged busybox" pods.json  pod-review.jq  '.pods[5].containers[0].image == "busybox"'
-assert_jq     "pods array has 7 entries"          pods.json  pod-review.jq  '.pods | length == 7'
+assert_jq     "ugly-app[7]: hasLiveness=false"         pods.json  pod-review.jq  '.pods[7].containers[0].hasLiveness == false'
+assert_jq     "ugly-app[7]: image is untagged busybox" pods.json  pod-review.jq  '.pods[7].containers[0].image == "busybox"'
+assert_jq     "pods array has 9 entries (Running only)" pods.json pod-review.jq '.pods | length == 9'
 assert_jq     "summary: pods_with_findings is 5"  pods.json  pod-review.jq  '.summary.pods_with_findings == 5'
-assert_jq     "summary: pods_clean is 2"          pods.json  pod-review.jq  '.summary.pods_clean == 2'
+assert_jq     "summary: pods_clean is 4"          pods.json  pod-review.jq  '.summary.pods_clean == 4'
 assert_jq     "summary: probes_findings is 4"     pods.json  pod-review.jq  '.summary.probes_findings == 4'
 assert_jq     "summary: image_findings is 4"      pods.json  pod-review.jq  '.summary.image_findings == 4'
 echo ""
@@ -198,15 +199,26 @@ echo ""
 
 # ── hc-pods.jq ───────────────────────────────────────────────────────────────
 echo "── hc-pods.jq ──"
-assert_jq     "has total field"                   pods.json  hc-pods.jq     'has("total")'
-assert_jq     "has notRunning array"              pods.json  hc-pods.jq     '.notRunning | type == "array"'
-assert_jq     "has highRestarts array"            pods.json  hc-pods.jq     '.highRestarts | type == "array"'
-assert_jq     "has oomKilled array"               pods.json  hc-pods.jq     '.oomKilled | type == "array"'
-assert_jq     "has notReady array"                pods.json  hc-pods.jq     '.notReady | type == "array"'
-assert_jq     "good-app[l79fq] flagged for highRestarts (8 restarts)" pods.json hc-pods.jq '.highRestarts | map(.name) | any(. | startswith("good-app"))'
-assert_jq     "bad-app NOT in highRestarts (2 restarts < threshold)" pods.json hc-pods.jq '.highRestarts | map(.name) | any(. | startswith("bad-app")) | not'
-assert_jq     "completed pod excluded from notRunning (Succeeded is valid)" pods.json hc-pods.jq '.notRunning | length == 0'
+assert_jq     "has total field"                    pods.json  hc-pods.jq  'has("total")'
+assert_jq     "has empty_namespace boolean"        pods.json  hc-pods.jq  'has("empty_namespace")'
+assert_jq     "has notRunning array"               pods.json  hc-pods.jq  '.notRunning | type == "array"'
+assert_jq     "has highRestarts array"             pods.json  hc-pods.jq  '.highRestarts | type == "array"'
+assert_jq     "has oomKilled array"                pods.json  hc-pods.jq  '.oomKilled | type == "array"'
+assert_jq     "has notReady array"                 pods.json  hc-pods.jq  '.notReady | type == "array"'
+assert_jq     "empty_namespace=false (12 pods)"    pods.json  hc-pods.jq  '.empty_namespace == false'
+assert_jq     "good-app flagged highRestarts (192)" pods.json hc-pods.jq '.highRestarts | map(.name) | any(. | startswith("good-app"))'
+assert_jq     "bad-app NOT in highRestarts (2 restarts)" pods.json hc-pods.jq '.highRestarts | map(.name) | any(. | startswith("bad-app")) | not'
+assert_jq     "Succeeded pods excluded from notRunning" pods.json hc-pods.jq '.notRunning | length == 0'
 echo ""
+
+
+# ── hc-pods.jq empty namespace ───────────────────────────────────────────────
+echo "── hc-pods.jq (empty namespace) ──"
+assert_jq     "empty_namespace=true when no pods"  pods-empty.json  hc-pods.jq  '.empty_namespace == true'
+assert_jq     "total=0 when no pods"               pods-empty.json  hc-pods.jq  '.total == 0'
+assert_jq     "notRunning=[] when no pods"         pods-empty.json  hc-pods.jq  '.notRunning | length == 0'
+echo ""
+
 
 # ── pvc-filter.jq ────────────────────────────────────────────────────────────
 echo "── pvc-filter.jq ──"

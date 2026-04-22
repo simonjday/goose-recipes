@@ -1,0 +1,127 @@
+version: "1.0.0"
+title: "Daily Cluster Health Check v2"
+description: "Comprehensive daily health check. Checks workload health across all non-system namespaces, not just the target namespace. Handles empty namespaces and empty event lists gracefully."
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 600
+    bundled: true
+instructions: |
+  You are a senior Kubernetes platform engineer conducting a daily cluster health review.
+
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions.
+  Use jq -f with the pre-built filter files in ./jq-filters/
+  Run the exact commands shown in each step. Do not modify or rewrite them.
+  If a command errors, report it and continue — do not attempt to fix the jq.
+
+  EMPTY NAMESPACE RULE: If a namespace returns total=0 pods, that is AMBER — not GREEN.
+  A namespace with no running pods may indicate the workload is down or misconfigured.
+  Never report GREEN for workload health when total=0.
+
+  RAG RULES:
+  RED   = immediate action needed (node NotReady, crashloop, OOMKilled, syncFailed, Degraded)
+  AMBER = action needed soon (high restarts >5, policy violations, OutOfSync, empty namespace, cert <30d)
+  GREEN = all checks passed with running pods confirmed
+
+  Run ALL steps in order. Do not stop early if a step returns no flagged items.
+  Produce the final report table regardless of findings.
+
+prompt: |
+  Run a daily health check. Primary namespace: '{{ namespace }}'. ArgoCD: '{{ argocd_namespace }}'.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/hc-nodes.jq \
+       ./jq-filters/hc-pods.jq \
+       ./jq-filters/hc-argo.jq \
+       ./jq-filters/hc-policy.jq
+
+  Step 2 — NODE HEALTH:
+    kubectl get nodes -o json | jq -f ./jq-filters/hc-nodes.jq
+    Flag: any notReady = RED | any pressure = AMBER
+
+  Step 3 — WORKLOAD HEALTH (all non-system namespaces):
+    Get list of non-system namespaces:
+      kubectl get namespaces -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' | \
+        grep -Ev '^(kube-system|kube-public|kube-node-lease|local-path-storage)$'
+
+    For each namespace returned, run:
+      kubectl get pods -n <namespace> -o json | jq -f ./jq-filters/hc-pods.jq
+
+    Record results per namespace. Flag:
+      empty_namespace=true               = AMBER (no pods running — workload may be down)
+      notRunning list non-empty          = RED
+      oomKilled list non-empty           = RED
+      highRestarts with restarts > 20    = RED
+      highRestarts with restarts > 5     = AMBER
+      notReady list non-empty            = AMBER
+
+  Step 4 — WARNING EVENTS (last 5, primary namespace only):
+    kubectl get events -n {{ namespace }} --field-selector type=Warning \
+      --sort-by='.lastTimestamp' -o json 2>/dev/null | \
+      jq -r 'if (.items | length) == 0 then "No warning events" else
+        [.items[-5:][]] | .[] | "\(.reason): \(.involvedObject.name) — \(.message)"
+      end'
+
+  Step 5 — ARGOCD SYNC ({{ argocd_namespace }}):
+    kubectl get applications.argoproj.io -n {{ argocd_namespace }} -o json | \
+      jq -f ./jq-filters/hc-argo.jq
+    Flag: degraded or syncFailed = RED | outOfSync or noAutoSync = AMBER
+
+  Step 6 — KYVERNO POLICY ({{ namespace }}):
+    kubectl get policyreport.wgpolicyk8s.io -n {{ namespace }} -o json | \
+      jq -f ./jq-filters/hc-policy.jq
+    Flag: any failures = AMBER (audit) or RED (enforce, if known)
+
+  Step 7 — CERT EXPIRY ({{ namespace }}):
+    zsh ./cert-check.sh {{ namespace }}
+
+    Interpret the SUMMARY line output:
+      Total: 0              → N/A  (no TLS secrets in this namespace — this is normal)
+      Total: >0, RED: 0     → GREEN
+      Total: >0, AMBER: >0  → AMBER
+      Total: >0, RED: >0    → RED
+
+    IMPORTANT: "Total: 0" is a valid result meaning the namespace has no TLS secrets.
+    Do NOT report this as an error, UNKNOWN, or script failure.
+    Do NOT report GREEN if Total: 0 — report N/A instead.
+    Only report UNKNOWN if the cert-check.sh script itself exits with an error.
+
+  Step 8 — PRODUCE FINAL REPORT (MANDATORY — always produce this regardless of findings):
+
+  ## Daily Cluster Health — {{ namespace }}
+
+  NODES          <RAG>  <total> nodes — <detail or "all healthy">
+  WORKLOAD       <RAG>  <n> namespaces checked — <summary, e.g. "4 empty, 1 healthy">
+  ARGOCD         <RAG>  <total> apps — <detail or "all synced">
+  KYVERNO        <RAG>  <failCount> failures — <detail or "none">
+  CERT EXPIRY    <RAG>  <summary — use N/A if Total: 0, e.g. "no TLS secrets in namespace">
+
+  OVERALL: <RED | AMBER | GREEN>
+
+  ---
+
+  WORKLOAD DETAIL
+  <namespace>: <total> pods | <RAG> | <issue or "healthy">
+  (one line per namespace, AMBER label if total=0)
+
+  RED — fix now:
+  - <item>: <kubectl command>
+  (or "none")
+
+  AMBER — fix soon:
+  - <item>: <kubectl command>
+  (or "none")
+
+  GREEN ✓: <comma-separated list of passing checks>
+
+parameters:
+  - key: namespace
+    input_type: string
+    requirement: optional
+    description: "Primary workload namespace for events, policy and cert checks"
+    default: "confluent"
+  - key: argocd_namespace
+    input_type: string
+    requirement: optional
+    description: "ArgoCD namespace"
+    default: "argocd"

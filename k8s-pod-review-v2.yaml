@@ -1,0 +1,109 @@
+version: "1.0.0"
+title: "K8s Pod Best Practice Review v2"
+description: >
+  Reviews Running pods in a namespace against Kubernetes best practices.
+  Succeeded/Failed pods (jobs) are excluded automatically by the filter.
+  Uses pre-built jq filter files — no inline jq required or permitted.
+  The filter pre-computes all counts — the model reads and reports, not recounts.
+extensions:
+  - type: builtin
+    name: developer
+    timeout: 300
+    bundled: true
+instructions: |
+  You are a Kubernetes reliability and security expert.
+
+  STRICT RULE — NO INLINE JQ: Never write your own jq expressions or shell commands
+  beyond the exact commands shown in the prompt steps.
+  The filter files handle all data extraction and pre-compute all counts.
+  Your only job is to run the exact commands shown and produce the report from their output.
+
+  STRICT RULE — NO EXTRA STEPS: Run exactly the steps listed. Do not invent additional
+  kubectl or jq commands. If a field is not in the filter output, do not query for it.
+
+  STRICT RULE — USE PRE-COMPUTED COUNTS: The filter output contains summary.pods_with_findings
+  and summary.pods_clean. Use these numbers directly in the SUMMARY — do not recount.
+
+  STRICT RULE — SKIP SUCCEEDED PODS: The filter already excludes Succeeded/Failed pods.
+  Only Running pods appear in the output. Do not flag job pods.
+
+prompt: |
+  Review Running pods in namespace '{{ namespace }}' against Kubernetes best practices.
+  Run every step in order. Do not add steps. Do not write new jq or shell commands.
+
+  Step 1 — Confirm filter files exist:
+    ls ./jq-filters/pod-review.jq ./jq-filters/pdb-pod-match.jq
+
+  Step 2 — Get pod data (Running pods only — Succeeded pods excluded by filter):
+    kubectl get pods -n {{ namespace }} -o json | jq -f ./jq-filters/pod-review.jq
+
+  Step 3 — Get PDB data:
+    kubectl get pdb -n {{ namespace }} -o json | jq -f ./jq-filters/pdb-pod-match.jq
+
+  Step 4 — Get deployment replica counts:
+    kubectl get deployments,statefulsets -n {{ namespace }} \
+      -o jsonpath='{range .items[*]}{.metadata.name}{" replicas="}{.spec.replicas}{"\n"}{end}'
+
+  Step 5 — Using ONLY the output from Steps 2, 3 and 4, produce the report below.
+  Do not run any more commands. All data needed is already in the output above.
+
+  The filter output from Step 2 contains:
+    summary.total_pods          — total pods including Succeeded (informational only)
+    summary.running_pods        — Running pods evaluated (use this as "Pods reviewed")
+    summary.resources_findings  — containers missing cpu/memory requests or limits
+    summary.probes_findings     — containers missing livenessProbe or readinessProbe
+    summary.image_findings      — containers using :latest or untagged images
+    summary.security_findings   — containers with allowPrivEsc/runAsNonRoot/readOnlyRoot issues
+    summary.security_pod_findings — pods with no pod-level runAsNonRoot
+    summary.pods_with_findings  — RUNNING pods with at least one finding (USE THIS DIRECTLY)
+    summary.pods_clean          — RUNNING pods with no findings (USE THIS DIRECTLY)
+    pods[]                      — per-pod detail array
+
+  For each pod in pods[]:
+    RESOURCES:  hasRequests=false or hasLimits=false on any container = FAIL
+    PROBES:     hasLiveness=false or hasReadiness=false on any container = FAIL
+    IMAGE:      image ends in ":latest" or has no ":" = FAIL
+    PULL POLICY: pullPolicy=Always AND image is latest/untagged = flag
+    SECURITY (container): allowPrivEsc=true OR runAsNonRoot=false OR readOnlyRoot=false = FAIL
+    SECURITY (pod): podSecCtx.runAsNonRoot=false = FAIL
+    RESTARTS:   restarts > 20 = flag RED | restarts > 5 = flag AMBER
+    PDB: workload has replicas > 1 from Step 4 AND no PDB selector matches pod labels = FAIL
+
+  PDB matching rule: a PDB covers a pod if the PDB selector labels are a subset
+  of the pod's labels. Derive pod labels from the pod name prefix
+  (e.g. "bad-app-649bfb75b9-6fzhw" belongs to workload "bad-app").
+
+  OUTPUT FORMAT — produce exactly this structure:
+
+  ## Pod Review — {{ namespace }}
+
+  | Pod | Restarts | RESOURCES | PROBES | IMAGE | SECURITY | PDB |
+  |-----|----------|-----------|--------|-------|----------|-----|
+  | <name> | <n> | PASS/FAIL | PASS/FAIL | PASS/FAIL | PASS/FAIL | PASS/FAIL/N/A |
+
+  (N/A for PDB when replicas=1)
+
+  ### Findings
+
+  For each FAILING pod only:
+  **<pod-name>**
+  - [CATEGORY] <container>: <specific issue>
+  Fix: `<kubectl patch command>`
+
+  ### SUMMARY
+  Pods reviewed (Running): <summary.running_pods>
+  PASS: <summary.pods_clean>
+  FAIL: <summary.pods_with_findings>
+  Findings by category:
+    RESOURCES: <summary.resources_findings>
+    PROBES:    <summary.probes_findings>
+    IMAGE:     <summary.image_findings>
+    SECURITY:  <summary.security_findings>
+    PDB:       <count from your PDB analysis>
+
+parameters:
+  - key: namespace
+    input_type: string
+    requirement: optional
+    description: "Namespace to inspect"
+    default: "confluent"
