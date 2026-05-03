@@ -1,9 +1,9 @@
 [.items[] | {
-  namespace: .metadata.namespace,
-  name: .metadata.name,
-  containers: [.spec.template.spec.containers[] | {
-    name: .name,
-    image: .image,
-    pullPolicy: .imagePullPolicy
+  namespace: (.metadata.namespace // "unknown"),
+  name: (.metadata.name // "unknown"),
+  containers: [(.spec.template.spec.containers // [])[] | {
+    name: (.name // "unknown"),
+    image: (.image // ""),
+    pullPolicy: (.imagePullPolicy // "IfNotPresent")
   }]
 }]

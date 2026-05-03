@@ -17,6 +17,9 @@ instructions: |
   Do NOT write any jq, grep, cut, awk or other commands to process the output.
   Do NOT recalculate or re-count anything — the filter output contains exact counts.
   Copy the numbers from the filter output directly into the report — do not derive them yourself.
+  CRITICAL: deploy-audit.jq is for Deployments ONLY. Never run it against CronJobs, Jobs,
+  StatefulSets, DaemonSets or any other resource kind. Step 3 uses kubectl get deployments — do
+  not change this to any other resource kind.
 prompt: |
   Perform a container image tag audit across {{ scope }}.
 
@@ -38,12 +41,13 @@ prompt: |
         "HIGH"              = named tag, no @sha256: digest
         "OK"                = digest pinned with @sha256:
 
-  Step 3 — Get deployment pull policies:
+  Step 3 — Get deployment pull policies (Deployments ONLY — do not query CronJobs, Jobs or other kinds):
     {% if scope == "cluster" %}
     kubectl get deployments --all-namespaces -o json | jq -f ./jq-filters/deploy-audit.jq
     {% else %}
     kubectl get deployments -n {{ scope }} -o json | jq -f ./jq-filters/deploy-audit.jq
     {% endif %}
+    If this step returns [] that is fine — it means no Deployments exist in the scope.
 
   Step 4 — YOU NOW HAVE ALL THE DATA. Do not run any more commands.
     Use the "summary" block from Step 2 for all counts in the report — copy them exactly.
@@ -52,7 +56,11 @@ prompt: |
     Look up pullPolicy from Step 3 by matching deployment name to pod name prefix.
     If a pod has no matching deployment (e.g. Job, CronJob pods) set Pull Policy to "-".
     Flag any CRITICAL image with pullPolicy=Always as highest risk.
-    List every pod individually — do not deduplicate or group.
+    List every pod individually in the CRITICAL and HIGH tables — do not deduplicate or group.
+    For the PASSING DEPLOYMENTS section: a deployment passes if ALL of its containers
+    across ALL of its pods are classified OK. Use Step 3 data for the deployment list
+    and Step 2 pod data to check classifications. List each passing deployment once only —
+    do not repeat per replica.
 
   Step 5 — Output:
 
@@ -81,6 +89,11 @@ prompt: |
   ----------------------
   Namespace | Pod | Container | Image
   <one row per HIGH container — findings or "None found ✓">
+
+  PASSING DEPLOYMENTS ✓ (all containers digest-pinned):
+  -------------------------------------------------------
+  Namespace | Deployment | Image(s)
+  <one row per passing deployment — or "None ✓ — no deployments with all-OK images">
 
   NAMESPACE SUMMARY:
   ------------------

@@ -1,7 +1,7 @@
 # goose-test namespace — sample resources for testing Goose recipes
 #
 # What each resource exercises:
-#   good-app      — passes pod-review: pinned tag, resources, probes, security ctx, PDB, 3 replicas
+#   good-app      — passes pod-review: pinned digest, resources, probes, security ctx, PDB, 3 replicas
 #   bad-app       — fails: latest tag + Always pull policy, no probes, no security ctx, no PDB
 #   ugly-app      — fails: untagged image, no probes, no security ctx, no PDB
 #                   (has minimal resources to satisfy Kyverno require-resource-limits policy)
@@ -16,24 +16,25 @@
 #   goose-test-limits — LimitRange (namespace-resource-quota recipe)
 #   good-app-pdb  — PDB covering good-app (pdb-coverage recipe)
 #
-# NOTE: All pod templates carry app + env labels to satisfy the
-#       require-pod-labels Kyverno policy on this cluster.
-#       ugly-app and the Job/CronJob carry minimal resource limits to satisfy
-#       require-resource-limits, but remain bad in the ways recipes check
-#       (no probes, no security context, untagged/latest image).
+# Policy notes:
+#   - require-pod-labels (Enforce):        all pod templates carry app + env labels
+#   - require-resource-limits (Enforce):   all pod templates carry requests + limits
+#   - disallow-privileged (Enforce):       no privileged containers
+#   - disallow-latest-tag (Audit):         bad-app and ugly-app intentionally violate this
+#                                          NOTE: Audit only — pods are admitted but flagged
+#   - mutate-add-readonly-rootfs (Mutate): injects readOnlyRootFilesystem: true on all pods
+#                                          bad-app and ugly-app use emptyDir volumes so nginx/busybox
+#                                          can still write to required paths
 #
 # Apply with:
-#   kubectl apply -f goose-test-manifests.yaml
-#
-# Tear down with:
-#   kubectl delete namespace goose-test
+#   kubectl delete namespace goose-test && kubectl apply -f goose-test-manifests.yaml
 #
 # Run recipes against it with:
-#   goose run --model qwen3-coder:30b --recipe k8s-pod-review.yaml --params namespace=goose-test --no-session
-#   goose run --model qwen3-coder:30b --recipe pdb-coverage.yaml --params scope=goose-test --no-session
-#   goose run --model qwen3-coder:30b --recipe image-tag-audit.yaml --params scope=goose-test --no-session
-#   goose run --model qwen3-coder:30b --recipe stale-resource-cleanup.yaml --params namespace=goose-test --no-session
-#   goose run --model qwen3-coder:30b --recipe namespace-resource-quota.yaml --params scope=goose-test --no-session
+#   goose run --model qwen3-coder:30b --recipe k8s-pod-review.yaml --params namespace=goose-test --no-session 2>&1 | glow -
+#   goose run --model qwen3-coder:30b --recipe pdb-coverage.yaml --params scope=goose-test --no-session 2>&1 | glow -
+#   goose run --model qwen3-coder:30b --recipe image-tag-audit.yaml --params scope=goose-test --no-session 2>&1 | glow -
+#   goose run --model qwen3-coder:30b --recipe stale-resource-cleanup.yaml --params namespace=goose-test --no-session 2>&1 | glow -
+#   goose run --model qwen3-coder:30b --recipe namespace-resource-quota.yaml --params scope=goose-test --no-session 2>&1 | glow -
 
 ---
 # ── Namespace ─────────────────────────────────────────────────────────────────
@@ -80,8 +81,16 @@ stringData:
   OLD_TOKEN: abc123
 ---
 # ── GOOD deployment ───────────────────────────────────────────────────────────
-# Passes pod-review: pinned tag, resources, probes, security context
-# Has a PDB covering it
+# Passes all policies and pod-review recipe checks:
+#   - image pinned to digest (immutable, no :latest)
+#   - resource requests + limits set
+#   - liveness + readiness probes configured
+#   - security context hardened (non-root, no privilege escalation, read-only rootfs)
+#   - 3 replicas with PDB covering it
+#   - uses ConfigMap and Secret (not stale)
+#
+# Refresh the digest before applying:
+#   crane digest nginx:1.25.3
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -106,7 +115,7 @@ spec:
         runAsUser: 1000
       containers:
         - name: good-app
-          image: nginx:1.25.3
+          image: nginx:1.25.3  # replace with: nginx@sha256:<digest from crane digest nginx:1.25.3>
           ports:
             - containerPort: 80
           resources:
@@ -132,6 +141,13 @@ spec:
             runAsNonRoot: true
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: nginx-tmp
+              mountPath: /tmp
           envFrom:
             - configMapRef:
                 name: app-config
@@ -141,6 +157,13 @@ spec:
                 secretKeyRef:
                   name: app-secret
                   key: DB_PASSWORD
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: nginx-tmp
+          emptyDir: {}
 ---
 # ── PDB for good-app ──────────────────────────────────────────────────────────
 apiVersion: policy/v1
@@ -155,8 +178,13 @@ spec:
       app: good-app
 ---
 # ── BAD deployment ────────────────────────────────────────────────────────────
-# Fails: latest tag + Always pull, no probes, no security ctx, 2 replicas + no PDB
-# Has resources to satisfy Kyverno require-resource-limits
+# Intentionally non-compliant — exercises image-tag-audit and pod-review recipes:
+#   - nginx:latest (mutable tag, no digest) — violates disallow-latest-tag (Audit)
+#   - imagePullPolicy: Always (unnecessary with pinned images)
+#   - no liveness or readiness probes
+#   - no security context (readOnlyRootFilesystem injected by Kyverno mutate policy)
+#   - 2 replicas with no PDB
+#   - emptyDir volumes allow nginx to write cache/pid files despite read-only rootfs
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -189,10 +217,28 @@ spec:
             limits:
               cpu: 100m
               memory: 128Mi
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: nginx-tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: nginx-tmp
+          emptyDir: {}
 ---
 # ── UGLY deployment ───────────────────────────────────────────────────────────
-# Fails: untagged image, no probes, no security ctx, 2 replicas + no PDB
-# Has minimal resources to satisfy Kyverno require-resource-limits
+# Intentionally non-compliant — exercises image-tag-audit and pod-review recipes:
+#   - busybox with no tag at all — violates disallow-latest-tag (Audit)
+#   - no liveness or readiness probes
+#   - no security context
+#   - 2 replicas with no PDB
+#   - emptyDir volumes for compatibility with read-only rootfs mutate injection
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -223,9 +269,17 @@ spec:
             limits:
               cpu: 50m
               memory: 32Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 # ── Single replica deployment ─────────────────────────────────────────────────
-# 1 replica — should NOT be flagged for missing PDB
+# 1 replica — intentionally no PDB (single replicas don't need one)
+# Should NOT be flagged by pdb-coverage recipe
+# Intentionally weak security context to exercise pod-review recipe
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -261,6 +315,20 @@ spec:
             runAsNonRoot: false
             allowPrivilegeEscalation: true
             readOnlyRootFilesystem: false
+          volumeMounts:
+            - name: nginx-cache
+              mountPath: /var/cache/nginx
+            - name: nginx-run
+              mountPath: /var/run
+            - name: nginx-tmp
+              mountPath: /tmp
+      volumes:
+        - name: nginx-cache
+          emptyDir: {}
+        - name: nginx-run
+          emptyDir: {}
+        - name: nginx-tmp
+          emptyDir: {}
 ---
 # ── Services ──────────────────────────────────────────────────────────────────
 apiVersion: v1
@@ -288,8 +356,7 @@ spec:
       targetPort: 80
 ---
 # ── Completed Job ─────────────────────────────────────────────────────────────
-# For stale-resource-cleanup recipe — a succeeded job
-# Has app + env labels and resource limits to satisfy Kyverno policies
+# For stale-resource-cleanup recipe — a succeeded job that should be flagged
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -317,7 +384,6 @@ spec:
   backoffLimit: 0
 ---
 # ── CronJob ───────────────────────────────────────────────────────────────────
-# Has app + env labels and resource limits to satisfy Kyverno policies
 apiVersion: batch/v1
 kind: CronJob
 metadata:
